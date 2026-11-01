@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Download, Search, Settings2, Sparkles, CheckCircle2, AlertCircle,
   Layers, Split, Folder, Shield, Globe, Cookie, Wifi, WifiOff, Loader2,
-  ExternalLink, Zap
+  ExternalLink, Zap, Scissors
 } from 'lucide-react';
 import { inspectUrl, startDownload, formatDuration, getTorStatus, getNetworkStatus } from '../api';
 import { InspectResult, TorStatus, NetworkStatusResponse } from '../types';
@@ -31,6 +31,11 @@ export const DownloadCard: React.FC<DownloadCardProps> = ({
   const [segmentUrlsText, setSegmentUrlsText] = useState('');
   const [customTitle, setCustomTitle] = useState('');
   const [customFolderOverride, setCustomFolderOverride] = useState('');
+
+  // Pre-download section trimming
+  const [trimEnabled, setTrimEnabled] = useState(false);
+  const [trimStart, setTrimStart] = useState('');
+  const [trimEnd, setTrimEnd] = useState('');
 
   // Anti-blocking options
   const [referer, setReferer] = useState('');
@@ -123,12 +128,20 @@ export const DownloadCard: React.FC<DownloadCardProps> = ({
         routing_mode: routingMode,
         custom_proxy: customProxy.trim() || undefined,
         cookies_from_browser: cookiesFromBrowser || undefined,
+        // Pre-download section trimming
+        trim_start: trimEnabled && trimStart.trim() ? trimStart.trim() : undefined,
+        trim_end: trimEnabled && trimEnd.trim() ? trimEnd.trim() : undefined,
       });
 
       setUrl('');
       setInspectData(null);
       setSegmentUrlsText('');
       setCustomTitle('');
+      if (trimEnabled) {
+        setTrimStart('');
+        setTrimEnd('');
+        setTrimEnabled(false);
+      }
       onDownloadStarted();
     } catch (err: any) {
       setError(err.message || 'Failed to start download');
@@ -635,6 +648,85 @@ export const DownloadCard: React.FC<DownloadCardProps> = ({
                   </button>
                 </div>
               </div>
+            </div>
+
+            {/* Pre-Download Clip / Section Trimmer */}
+            <div className="pt-3 border-t border-dark-700/60">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Scissors className="h-4 w-4 text-emerald-400" />
+                  <span className="text-xs font-semibold text-slate-200">
+                    Download Specific Clip / Section (Trim)
+                  </span>
+                  <span className="text-[10px] text-emerald-400/90 bg-emerald-500/10 px-1.5 py-0.5 rounded font-mono">
+                    Fast &amp; Bandwidth Saver
+                  </span>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={trimEnabled}
+                    onChange={(e) => setTrimEnabled(e.target.checked)}
+                    className="sr-only"
+                  />
+                  <div
+                    onClick={() => setTrimEnabled(!trimEnabled)}
+                    className={`relative w-8 h-4 rounded-full transition-colors cursor-pointer ${
+                      trimEnabled ? 'bg-emerald-500' : 'bg-dark-600'
+                    }`}
+                  >
+                    <div
+                      className={`absolute top-0.5 h-3 w-3 bg-white rounded-full shadow transition-all ${
+                        trimEnabled ? 'left-4' : 'left-0.5'
+                      }`}
+                    />
+                  </div>
+                  <span className="text-[11px] text-slate-400">
+                    {trimEnabled ? 'Active' : 'Off'}
+                  </span>
+                </label>
+              </div>
+
+              {trimEnabled && (
+                <div className="bg-dark-800/80 border border-emerald-500/20 rounded-xl p-3 space-y-2 mt-2">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[11px] font-medium text-slate-300 block mb-1">
+                        Start Time (e.g. 01:30 or 90)
+                      </label>
+                      <input
+                        type="text"
+                        value={trimStart}
+                        onChange={(e) => setTrimStart(e.target.value)}
+                        placeholder="00:00"
+                        className="w-full bg-dark-900 border border-dark-600 text-slate-200 text-xs rounded-lg px-3 py-1.5 font-mono outline-none focus:border-emerald-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-medium text-slate-300 block mb-1">
+                        End Time (e.g. 05:45 or 345)
+                      </label>
+                      <input
+                        type="text"
+                        value={trimEnd}
+                        onChange={(e) => setTrimEnd(e.target.value)}
+                        placeholder={inspectData?.info?.duration ? formatDuration(inspectData.info.duration) : "End of video"}
+                        className="w-full bg-dark-900 border border-dark-600 text-slate-200 text-xs rounded-lg px-3 py-1.5 font-mono outline-none focus:border-emerald-500"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-slate-400 flex items-center justify-between">
+                    <span>
+                      💡 Downloads <strong className="text-emerald-300">only</strong> the requested range directly from the web source using frame-accurate keyframe slicing.
+                    </span>
+                    {inspectData?.info?.duration ? (
+                      <span className="text-slate-400 font-mono">
+                        Full duration: {formatDuration(inspectData.info.duration)}
+                      </span>
+                    ) : null}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         )}

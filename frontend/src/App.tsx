@@ -163,6 +163,10 @@ export const App: React.FC = () => {
       <VideoPlayerModal
         video={playingVideo}
         onClose={() => setPlayingVideo(null)}
+        onOpenTrim={(video) => {
+          setPlayingVideo(null);
+          setMediaToolsTarget({ video, initialTab: 'trim' });
+        }}
       />
 
       {/* Media Studio & Converter Modal (Audio, Compress, GIF, Trim) */}

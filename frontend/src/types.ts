@@ -59,6 +59,9 @@ export interface DownloadRequestPayload {
   use_tor?: boolean;
   custom_proxy?: string;
   routing_mode?: 'direct' | 'warp' | 'tor';
+  // Pre-download section trimming
+  trim_start?: string;
+  trim_end?: string;
 }
 
 export interface ProxyEndpointStatus {
@@ -155,4 +158,5 @@ export interface TrimVideoPayload {
   end_time: number;
   title?: string;
   mode?: 'fast' | 'reencode';
+  extract_audio?: boolean;
 }

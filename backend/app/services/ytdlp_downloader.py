@@ -5,6 +5,26 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Callable
 from app.config import DEFAULT_VIDEOS_DIR, get_configured_download_dir, get_active_tor_proxy, get_active_warp_proxy
 
+
+def parse_time_seconds(val: Optional[str]) -> Optional[float]:
+    """Converts a time string ('01:30', '01:15:30', or '90') into total seconds as a float."""
+    if val is None:
+        return None
+    val_str = str(val).strip()
+    if not val_str:
+        return None
+    try:
+        parts = val_str.split(":")
+        if len(parts) == 1:
+            return float(parts[0])
+        elif len(parts) == 2:
+            return float(parts[0]) * 60 + float(parts[1])
+        elif len(parts) == 3:
+            return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+    except Exception:
+        return None
+    return None
+
 class YtDlpDownloader:
     """Wrapper around yt-dlp Python API with real-time async callbacks."""
 
@@ -103,6 +123,8 @@ class YtDlpDownloader:
         custom_proxy: Optional[str] = None,
         cookies_from_browser: Optional[str] = None,
         routing_mode: Optional[str] = None,
+        trim_start: Optional[str] = None,
+        trim_end: Optional[str] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Dict[str, Any]:
         loop = asyncio.get_running_loop()
@@ -195,6 +217,19 @@ class YtDlpDownloader:
         if cookies_from_browser and cookies_from_browser.strip():
             browser = cookies_from_browser.strip().lower()
             ydl_opts['cookiesfrombrowser'] = (browser,)
+
+        # Pre-download range/trim support
+        start_sec = parse_time_seconds(trim_start)
+        end_sec = parse_time_seconds(trim_end)
+        if start_sec is not None or end_sec is not None:
+            s = start_sec if start_sec is not None else 0.0
+            e = end_sec if end_sec is not None else float("inf")
+            try:
+                from yt_dlp.utils import download_range_func
+                ydl_opts['download_ranges'] = download_range_func(None, [(s, e)])
+                ydl_opts['force_keyframes_at_cuts'] = True
+            except Exception:
+                pass
 
         def _run_ydl():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:

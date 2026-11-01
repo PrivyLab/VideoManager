@@ -365,7 +365,7 @@ async def create_gif_endpoint(video_id: str, req: CreateGifRequest):
 
 @router.post("/{video_id}/trim")
 async def trim_video_endpoint(video_id: str, req: TrimRequest):
-    """Trims video between start and end timestamps."""
+    """Trims video between start and end timestamps, with optional audio extraction."""
     video = db_get_video(video_id)
     if not video or not video.get("file_path"):
         raise HTTPException(status_code=404, detail="Video not found")
@@ -375,8 +375,9 @@ async def trim_video_endpoint(video_id: str, req: TrimRequest):
         raise HTTPException(status_code=404, detail="Source video file not found on disk")
 
     new_id = str(uuid.uuid4())[:8]
+    ext = "mp3" if req.extract_audio else "mp4"
     safe_title = req.title.strip() if req.title and req.title.strip() else f"{video.get('title', 'video')}_trimmed"
-    out_filename = f"{new_id}_{safe_title.replace(' ', '_').replace('/', '_')}.mp4"
+    out_filename = f"{new_id}_{safe_title.replace(' ', '_').replace('/', '_')}.{ext}"
     out_path = src_path.parent / out_filename
 
     try:
@@ -385,7 +386,8 @@ async def trim_video_endpoint(video_id: str, req: TrimRequest):
             out_path,
             start_time=req.start_time,
             end_time=req.end_time,
-            mode=req.mode or "fast"
+            mode=req.mode or "fast",
+            extract_audio=bool(req.extract_audio)
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Trimming failed: {str(e)}")
@@ -398,7 +400,7 @@ async def trim_video_endpoint(video_id: str, req: TrimRequest):
         "duration": res["duration"],
         "file_path": str(out_path),
         "file_size": res["file_size"],
-        "file_format": "mp4",
+        "file_format": res.get("file_format", ext),
         "thumbnail_url": res.get("thumbnail_url") or video.get("thumbnail_url") or "",
         "resolution": res.get("resolution") or video.get("resolution") or "1080p",
         "status": "completed",
@@ -406,7 +408,7 @@ async def trim_video_endpoint(video_id: str, req: TrimRequest):
         "speed": "",
         "eta": "",
         "error_message": "",
-        "downloader_type": "trim",
+        "downloader_type": "audio" if req.extract_audio else "trim",
         "chunks_total": 0,
         "chunks_completed": 0,
         "created_at": now,

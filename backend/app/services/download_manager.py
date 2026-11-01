@@ -208,6 +208,8 @@ class DownloadManager:
                     custom_proxy=req.custom_proxy,
                     cookies_from_browser=req.cookies_from_browser,
                     routing_mode=req.routing_mode,
+                    trim_start=req.trim_start,
+                    trim_end=req.trim_end,
                     progress_callback=progress_cb,
                 )
 

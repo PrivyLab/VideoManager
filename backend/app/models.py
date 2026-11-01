@@ -17,6 +17,10 @@ class DownloadRequest(BaseModel):
     custom_proxy: Optional[str] = None          # Any custom proxy: http://, https://, socks5://
     routing_mode: Optional[str] = "direct"      # "direct", "warp", "tor"
 
+    # Pre-download section trimming (optional)
+    trim_start: Optional[str] = None            # e.g. "01:30" or "90"
+    trim_end: Optional[str] = None              # e.g. "04:15" or "255"
+
 class InspectRequest(BaseModel):
     url: str
     referer: Optional[str] = None
@@ -92,6 +96,7 @@ class TrimRequest(BaseModel):
     end_time: float
     title: Optional[str] = None
     mode: Optional[str] = "fast"  # "fast" or "reencode"
+    extract_audio: Optional[bool] = False
 
 class ExtractAudioRequest(BaseModel):
     format: Optional[str] = "mp3"  # "mp3", "m4a", "aac", "wav"

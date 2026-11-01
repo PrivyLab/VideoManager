@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   X,
   Music,
@@ -9,7 +9,11 @@ import {
   HardDrive,
   Loader2,
   AlertTriangle,
-  Sparkles
+  Sparkles,
+  Play,
+  Pause,
+  FastForward,
+  Rewind
 } from 'lucide-react';
 import { VideoItem } from '../types';
 import { formatBytes, formatDuration, extractAudio, compressVideo, createGif, trimVideo } from '../api';
@@ -49,10 +53,50 @@ export const MediaToolsModal: React.FC<MediaToolsModalProps> = ({
   const [gifTitle, setGifTitle] = useState(`${video.title || 'video'}_gif`);
 
   // Trim state
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [videoCurrentTime, setVideoCurrentTime] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(video.duration || 10);
   const [trimMode, setTrimMode] = useState<'fast' | 'reencode'>('fast');
+  const [trimAsAudio, setTrimAsAudio] = useState(false);
   const [trimTitle, setTrimTitle] = useState(`${video.title || 'video'}_clip`);
+
+  const togglePlay = () => {
+    if (!videoRef.current) return;
+    if (videoRef.current.paused) {
+      videoRef.current.play();
+      setIsPlaying(true);
+    } else {
+      videoRef.current.pause();
+      setIsPlaying(false);
+    }
+  };
+
+  const jumpRelative = (delta: number) => {
+    if (!videoRef.current) return;
+    videoRef.current.currentTime = Math.max(0, Math.min(videoRef.current.duration || 1000, videoRef.current.currentTime + delta));
+  };
+
+  const setStartToCurrent = () => {
+    if (videoRef.current) {
+      const cur = Math.round(videoRef.current.currentTime * 10) / 10;
+      setTrimStart(cur);
+      if (trimEnd <= cur) {
+        setTrimEnd(Math.min(video.duration || cur + 10, cur + 10));
+      }
+    }
+  };
+
+  const setEndToCurrent = () => {
+    if (videoRef.current) {
+      const cur = Math.round(videoRef.current.currentTime * 10) / 10;
+      setTrimEnd(cur);
+      if (trimStart >= cur) {
+        setTrimStart(Math.max(0, cur - 10));
+      }
+    }
+  };
 
   const handleExtractAudio = async () => {
     setLoading(true);
@@ -116,6 +160,7 @@ export const MediaToolsModal: React.FC<MediaToolsModalProps> = ({
         start_time: Number(trimStart),
         end_time: Number(trimEnd),
         mode: trimMode,
+        extract_audio: trimAsAudio,
         title: trimTitle.trim() || undefined,
       });
       onSuccess(res.video);
@@ -430,45 +475,158 @@ export const MediaToolsModal: React.FC<MediaToolsModalProps> = ({
           {/* TAB 4: TRIM CLIP */}
           {activeTab === 'trim' && (
             <div className="space-y-4">
+              {/* Interactive Video Player & Scrubber */}
+              <div className="bg-black/80 border border-dark-700 rounded-xl overflow-hidden shadow-inner">
+                <div className="relative aspect-video max-h-52 w-full bg-black flex items-center justify-center">
+                  <video
+                    ref={videoRef}
+                    src={`/api/videos/${video.id}/stream`}
+                    className="w-full h-full object-contain"
+                    onTimeUpdate={() => {
+                      if (videoRef.current) {
+                        setVideoCurrentTime(videoRef.current.currentTime);
+                      }
+                    }}
+                    onPlay={() => setIsPlaying(true)}
+                    onPause={() => setIsPlaying(false)}
+                    onEnded={() => setIsPlaying(false)}
+                  />
+                </div>
+
+                {/* Player Controls Bar */}
+                <div className="p-2.5 bg-dark-900 border-t border-dark-800 flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => jumpRelative(-5)}
+                      className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-dark-800 transition-colors"
+                      title="Rewind 5s"
+                    >
+                      <Rewind className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={togglePlay}
+                      className="p-1.5 bg-brand-500 hover:bg-brand-600 text-white rounded-lg shadow-sm transition-colors"
+                    >
+                      {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5 fill-current" />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => jumpRelative(5)}
+                      className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-dark-800 transition-colors"
+                      title="Forward 5s"
+                    >
+                      <FastForward className="h-3.5 w-3.5" />
+                    </button>
+                    <span className="font-mono text-xs text-brand-400 ml-1.5">
+                      {formatDuration(videoCurrentTime)} / {formatDuration(video.duration || 0)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={setStartToCurrent}
+                      className="px-2 py-1 text-xs bg-dark-800 hover:bg-dark-700 text-emerald-400 border border-emerald-500/30 rounded-lg font-medium flex items-center gap-1 transition-colors"
+                    >
+                      📍 Set Start ({formatDuration(videoCurrentTime)})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={setEndToCurrent}
+                      className="px-2 py-1 text-xs bg-dark-800 hover:bg-dark-700 text-rose-400 border border-rose-500/30 rounded-lg font-medium flex items-center gap-1 transition-colors"
+                    >
+                      📍 Set End ({formatDuration(videoCurrentTime)})
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Start & End Sliders with Numeric Inputs */}
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-medium text-slate-300 block mb-1.5">
-                    Start Time: <span className="font-mono text-brand-400">{formatDuration(trimStart)}</span>
-                  </label>
+                <div className="bg-dark-800/60 border border-dark-700 rounded-xl p-3">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-medium text-slate-300">Start Timestamp</span>
+                    <span className="font-mono text-xs text-emerald-400 font-bold">{formatDuration(trimStart)}</span>
+                  </div>
                   <input
                     type="range"
                     min="0"
                     max={Math.max(0, (video.duration || 10) - 1)}
                     step="0.5"
                     value={trimStart}
-                    onChange={(e) => setTrimStart(parseFloat(e.target.value))}
-                    className="w-full accent-brand-500"
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      setTrimStart(v);
+                      if (videoRef.current) videoRef.current.currentTime = v;
+                    }}
+                    className="w-full accent-emerald-500 mb-2"
                   />
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-slate-400 shrink-0">Secs:</span>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="0"
+                      max={trimEnd - 0.1}
+                      value={trimStart}
+                      onChange={(e) => {
+                        const v = Math.max(0, parseFloat(e.target.value) || 0);
+                        setTrimStart(v);
+                        if (videoRef.current) videoRef.current.currentTime = v;
+                      }}
+                      className="w-full bg-dark-900 border border-dark-700 rounded px-2 py-1 text-xs font-mono text-slate-200 outline-none focus:border-emerald-500"
+                    />
+                  </div>
                 </div>
 
-                <div>
-                  <label className="text-xs font-medium text-slate-300 block mb-1.5">
-                    End Time: <span className="font-mono text-brand-400">{formatDuration(trimEnd)}</span>
-                  </label>
+                <div className="bg-dark-800/60 border border-dark-700 rounded-xl p-3">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-medium text-slate-300">End Timestamp</span>
+                    <span className="font-mono text-xs text-rose-400 font-bold">{formatDuration(trimEnd)}</span>
+                  </div>
                   <input
                     type="range"
                     min="1"
                     max={video.duration || 10}
                     step="0.5"
                     value={trimEnd}
-                    onChange={(e) => setTrimEnd(parseFloat(e.target.value))}
-                    className="w-full accent-brand-500"
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      setTrimEnd(v);
+                      if (videoRef.current) videoRef.current.currentTime = v;
+                    }}
+                    className="w-full accent-rose-500 mb-2"
                   />
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-slate-400 shrink-0">Secs:</span>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min={trimStart + 0.1}
+                      max={video.duration || 10000}
+                      value={trimEnd}
+                      onChange={(e) => {
+                        const v = Math.max(trimStart + 0.1, parseFloat(e.target.value) || 0);
+                        setTrimEnd(v);
+                        if (videoRef.current) videoRef.current.currentTime = v;
+                      }}
+                      className="w-full bg-dark-900 border border-dark-700 rounded px-2 py-1 text-xs font-mono text-slate-200 outline-none focus:border-rose-500"
+                    />
+                  </div>
                 </div>
               </div>
 
+              {/* Output Clip Length Preview */}
               <div className="p-3 bg-dark-800/80 border border-dark-700 rounded-xl flex items-center justify-between text-xs">
                 <span className="text-slate-400">Resulting Clip Length:</span>
-                <span className="font-mono font-bold text-brand-400">
+                <span className="font-mono font-bold text-brand-400 text-sm">
                   {formatDuration(Math.max(0, trimEnd - trimStart))}
                 </span>
               </div>
 
+              {/* Cutting Mode Selection */}
               <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
@@ -479,8 +637,8 @@ export const MediaToolsModal: React.FC<MediaToolsModalProps> = ({
                       : 'border-dark-700 bg-dark-800/60 text-slate-300 hover:border-dark-600'
                   }`}
                 >
-                  <span className="text-xs block">⚡ Instant Stream Copy</span>
-                  <span className="text-[10px] text-slate-400 mt-0.5 block">0.1s execution without re-encoding.</span>
+                  <span className="text-xs block font-semibold">⚡ Instant Stream Copy</span>
+                  <span className="text-[10px] text-slate-400 mt-0.5 block">Sub-second cut without re-encoding (lossless).</span>
                 </button>
 
                 <button
@@ -492,10 +650,24 @@ export const MediaToolsModal: React.FC<MediaToolsModalProps> = ({
                       : 'border-dark-700 bg-dark-800/60 text-slate-300 hover:border-dark-600'
                   }`}
                 >
-                  <span className="text-xs block">🎯 Frame-Accurate Cut</span>
-                  <span className="text-[10px] text-slate-400 mt-0.5 block">Precise cut with clean I-frame keyframes.</span>
+                  <span className="text-xs block font-semibold">🎯 Frame-Accurate Cut</span>
+                  <span className="text-[10px] text-slate-400 mt-0.5 block">Precise cut down to individual frames.</span>
                 </button>
               </div>
+
+              {/* Extract Audio Snippet Checkbox */}
+              <label className="flex items-center gap-2 p-3 bg-dark-800/50 border border-dark-700/80 rounded-xl cursor-pointer hover:bg-dark-800 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={trimAsAudio}
+                  onChange={(e) => setTrimAsAudio(e.target.checked)}
+                  className="rounded border-dark-600 text-brand-500 focus:ring-brand-500"
+                />
+                <div className="text-xs">
+                  <span className="font-medium text-slate-200">🎵 Save as MP3 Audio snippet</span>
+                  <span className="block text-[10px] text-slate-400">Extracts only the audio track for this trimmed slice.</span>
+                </div>
+              </label>
 
               <div>
                 <label className="text-xs font-medium text-slate-300 block mb-1.5">Clip Title</label>
@@ -560,7 +732,7 @@ export const MediaToolsModal: React.FC<MediaToolsModalProps> = ({
               className="px-5 py-2.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-xs font-medium shadow-lg shadow-brand-500/20 disabled:opacity-40 flex items-center gap-2 transition-all"
             >
               {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Scissors className="h-3.5 w-3.5" />}
-              <span>Cut & Save Clip</span>
+              <span>{trimAsAudio ? 'Cut & Save MP3 Audio' : 'Cut & Save Video Clip'}</span>
             </button>
           )}
         </div>

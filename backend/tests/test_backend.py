@@ -154,10 +154,55 @@ def test_media_tools():
     Path("/tmp/test_out_comp_thumb.jpg").unlink(missing_ok=True)
     print("Media Tools (Extract Audio, Compress, GIF) test: PASSED")
 
+def test_video_trimmer():
+    import asyncio
+    import subprocess
+    from app.services.ytdlp_downloader import parse_time_seconds
+
+    # Test time parser
+    assert parse_time_seconds("01:30") == 90.0
+    assert parse_time_seconds("00:45") == 45.0
+    assert parse_time_seconds("90") == 90.0
+    assert parse_time_seconds("01:10:00") == 4200.0
+    assert parse_time_seconds("") is None
+    assert parse_time_seconds(None) is None
+
+    # Generate a 4-second test video
+    source = Path("/tmp/test_source_trim.mp4")
+    cmd = ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=4:size=320x240:rate=30", "-f", "lavfi", "-i", "sine=frequency=600:duration=4", "-c:v", "libx264", "-c:a", "aac", "-pix_fmt", "yuv420p", str(source)]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    out_fast = Path("/tmp/test_trim_fast.mp4")
+    out_reencode = Path("/tmp/test_trim_reencode.mp4")
+    out_audio = Path("/tmp/test_trim_audio.mp3")
+
+    async def run_trim_tests():
+        res_fast = await trim_video(source, out_fast, start_time=1.0, end_time=3.0, mode="fast")
+        res_reencode = await trim_video(source, out_reencode, start_time=0.5, end_time=2.5, mode="reencode")
+        res_audio = await trim_video(source, out_audio, start_time=1.0, end_time=2.0, extract_audio=True)
+        return res_fast, res_reencode, res_audio
+
+    res_fast, res_reencode, res_audio = asyncio.run(run_trim_tests())
+
+    assert out_fast.exists() and out_fast.stat().st_size > 100
+    assert out_reencode.exists() and out_reencode.stat().st_size > 100
+    assert out_audio.exists() and out_audio.stat().st_size > 100
+    assert res_audio["file_format"] == "mp3"
+
+    # Cleanup
+    source.unlink(missing_ok=True)
+    out_fast.unlink(missing_ok=True)
+    out_reencode.unlink(missing_ok=True)
+    out_audio.unlink(missing_ok=True)
+    Path("/tmp/test_trim_fast_thumb.jpg").unlink(missing_ok=True)
+    Path("/tmp/test_trim_reencode_thumb.jpg").unlink(missing_ok=True)
+    print("Video Trimmer (Instant Cut, Frame-Accurate Cut, Audio Snippet) test: PASSED")
+
 if __name__ == "__main__":
     test_db_operations()
     test_chunk_engine_merging()
     test_download_folder_configuration()
     test_video_stitching()
     test_media_tools()
+    test_video_trimmer()
     print("ALL TESTS PASSED SUCCESSFULLY!")

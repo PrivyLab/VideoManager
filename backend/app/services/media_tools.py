@@ -233,10 +233,13 @@ async def trim_video(
     output_path: Path,
     start_time: float,
     end_time: float,
-    mode: str = "fast"
+    mode: str = "fast",
+    extract_audio: bool = False
 ) -> Dict[str, Any]:
     """
     Trim a video file between start_time and end_time.
+    Supports lossless instant stream copy ("fast"), frame-accurate re-encode ("reencode"),
+    or direct audio snippet extraction ("extract_audio=True").
     """
     if not source_path.exists():
         raise FileNotFoundError(f"Source video file not found: {source_path}")
@@ -248,6 +251,38 @@ async def trim_video(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     ffmpeg_bin = get_ffmpeg_bin()
     duration_segment = end_time - start_time
+
+    if extract_audio:
+        cmd = [
+            ffmpeg_bin,
+            "-y",
+            "-ss", str(start_time),
+            "-to", str(end_time),
+            "-i", str(source_path.resolve()),
+            "-vn",
+            "-c:a", "libmp3lame",
+            "-b:a", "192k",
+            str(output_path.resolve())
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            err_msg = stderr.decode("utf-8", errors="ignore")[-400:]
+            raise RuntimeError(f"FFmpeg audio trim failed: {err_msg}")
+
+        info = probe_file(output_path)
+        return {
+            "file_path": str(output_path),
+            "file_size": info["size"],
+            "duration": info["duration"] or duration_segment,
+            "resolution": "Audio",
+            "file_format": "mp3",
+            "thumbnail_url": "",
+        }
 
     if mode == "fast":
         cmd = [
