@@ -3,14 +3,23 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
-from fastapi import APIRouter, HTTPException, Header, Response, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import APIRouter, HTTPException, Header, Response, Request, status
+from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from app.database import db_get_all_videos, db_get_video, db_delete_video, db_create_video
 from app.config import DEFAULT_VIDEOS_DIR, VIDEOS_DIR, cleanup_video_artifacts
-from app.models import StitchRequest, ExtractAudioRequest, CompressVideoRequest, CreateGifRequest, TrimRequest
+from app.models import (
+    StitchRequest, ExtractAudioRequest, CompressVideoRequest, CreateGifRequest, TrimRequest,
+    PinVerifyRequest, PinConfigRequest
+)
 from app.services.download_manager import download_manager
 from app.services.video_stitcher import VideoStitcher
 from app.services.media_tools import extract_audio, compress_video, create_gif, trim_video
+from app.services.qr_generator import get_local_wifi_ip, generate_qr_svg
+from app.services.faststart import ensure_faststart
+from app.services.stream_auth import (
+    generate_stream_token, verify_stream_token, get_or_create_pin,
+    set_pin_config, verify_video_pin, is_client_localhost, is_stream_authorized
+)
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
 
@@ -80,7 +89,13 @@ def detect_content_type(file_path: Path) -> Tuple[str, str]:
 
 
 @router.get("")
-async def list_videos(status_filter: Optional[str] = None):
+async def list_videos(request: Request, status_filter: Optional[str] = None):
+    # Shield video library: only allow local desktop client to list the library
+    if not is_client_localhost(request):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: Full video library can only be accessed locally on this machine."
+        )
     videos = db_get_all_videos(status_filter)
     return {"videos": videos}
 
@@ -190,7 +205,13 @@ async def delete_video(video_id: str):
 
 
 @router.get("/{video_id}/download")
-async def download_file(video_id: str):
+async def download_file(video_id: str, request: Request):
+    if not is_stream_authorized(request, video_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: Valid cryptographic stream token or PIN authentication required on local Wi-Fi."
+        )
+
     video = db_get_video(video_id)
     if not video or not video.get("file_path"):
         raise HTTPException(status_code=404, detail="Video file not found")
@@ -449,13 +470,21 @@ async def get_video_thumbnail(video_id: str):
     return FileResponse(thumb_p, media_type="image/jpeg")
 
 
-@router.get("/{video_id}/stream")
-async def stream_video(video_id: str, range: Optional[str] = Header(None)):
+@router.api_route("/{video_id}/stream", methods=["GET", "HEAD"])
+async def stream_video(video_id: str, request: Request):
     """
-    Stream video with HTTP Range support.
-    Detects the real container format from magic bytes so the browser
-    gets the correct Content-Type regardless of the file extension.
+    Stream video with full RFC 7233 / 9110 HTTP Range support for mobile seeking.
+    Ensures MP4 moov metadata atom is placed at the beginning of the file (FastStart)
+    so mobile browsers (iOS Safari, Android Chrome) can seek forward instantly without
+    stalling or buffering the entire video.
+    Protected by HMAC-SHA256 tokens and PIN verification against Wi-Fi eavesdroppers.
     """
+    if not is_stream_authorized(request, video_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: Valid cryptographic stream token or PIN authentication required on local Wi-Fi."
+        )
+
     video = db_get_video(video_id)
     if not video or not video.get("file_path"):
         raise HTTPException(status_code=404, detail="Video not found")
@@ -464,7 +493,6 @@ async def stream_video(video_id: str, range: Optional[str] = Header(None)):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Video file not found on disk")
 
-    file_size = file_path.stat().st_size
     content_type, real_ext = detect_content_type(file_path)
 
     # MPEG-TS (.ts) is not natively playable in browser <video> tags.
@@ -484,40 +512,153 @@ async def stream_video(video_id: str, range: Optional[str] = Header(None)):
             }
         )
 
-    if range:
-        range_str = range.replace("bytes=", "")
-        parts = range_str.split("-")
-        start = int(parts[0]) if parts[0] else 0
-        end = int(parts[1]) if len(parts) > 1 and parts[1] else file_size - 1
-        end = min(end, file_size - 1)
-        chunk_size = (end - start) + 1
+    # Ensure MP4 faststart atom is at the beginning for instant mobile seeking
+    if content_type == "video/mp4" or file_path.suffix.lower() in [".mp4", ".m4v", ".mov"]:
+        await ensure_faststart(file_path)
 
-        def iterfile():
-            with open(file_path, "rb") as f:
-                f.seek(start)
-                bytes_left = chunk_size
-                while bytes_left > 0:
-                    data = f.read(min(bytes_left, 65536))
-                    if not data:
-                        break
-                    bytes_left -= len(data)
-                    yield data
-
-        headers = {
-            "Content-Range": f"bytes {start}-{end}/{file_size}",
-            "Accept-Ranges": "bytes",
-            "Content-Length": str(chunk_size),
-            "Content-Type": content_type,
-        }
-        return StreamingResponse(
-            iterfile(),
-            status_code=status.HTTP_206_PARTIAL_CONTENT,
-            headers=headers
-        )
-
+    # Starlette FileResponse natively and asynchronously handles:
+    # 1. 'Range: bytes=start-end' (sub-ranges)
+    # 2. 'Range: bytes=start-' (open-ended seeks)
+    # 3. 'Range: bytes=-N' (suffix range for footer/moov reading)
+    # 4. HEAD requests (for duration and dimension probing)
+    # 5. ETag and Last-Modified caching headers required by mobile Safari
     headers = {
         "Accept-Ranges": "bytes",
-        "Content-Length": str(file_size),
-        "Content-Type": content_type,
+        "Cache-Control": "public, max-age=3600",
     }
     return FileResponse(file_path, headers=headers, media_type=content_type)
+
+
+@router.get("/{video_id}/share-link")
+async def get_video_share_link(video_id: str, port: Optional[int] = 8000):
+    """Returns local Wi-Fi streaming URL with compact QR code and PIN security."""
+    video = db_get_video(video_id)
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    local_ip = get_local_wifi_ip()
+    token = generate_stream_token(video_id)
+    pin, pin_enabled = get_or_create_pin(video_id)
+
+    if pin_enabled and pin:
+        watch_url = f"http://{local_ip}:{port}/watch/{video_id}?p={pin}"
+        qr_endpoint = f"/api/videos/{video_id}/qr.svg?ip={local_ip}&port={port}&p={pin}"
+    else:
+        watch_url = f"http://{local_ip}:{port}/watch/{video_id}"
+        qr_endpoint = f"/api/videos/{video_id}/qr.svg?ip={local_ip}&port={port}"
+    stream_url = f"http://{local_ip}:{port}/api/videos/{video_id}/stream?token={token}"
+
+    return {
+        "video_id": video_id,
+        "title": video.get("title", "Video"),
+        "local_ip": local_ip,
+        "port": port,
+        "watch_url": watch_url,
+        "stream_url": stream_url,
+        "qr_url": qr_endpoint,
+        "token": token,
+        "pin": pin,
+        "pin_enabled": pin_enabled,
+        "encrypted": True,
+        "duration": video.get("duration", 0),
+        "file_size": video.get("file_size", 0),
+        "file_format": video.get("file_format", "mp4")
+    }
+
+
+@router.get("/{video_id}/qr.svg")
+async def get_video_qr_svg(
+    video_id: str,
+    request: Request,
+    ip: Optional[str] = None,
+    port: Optional[str] = "8000",
+    p: Optional[str] = None,
+    pin: Optional[str] = None,
+    token: Optional[str] = None
+):
+    """Renders a crisp vector SVG QR code with embedded authorization PIN."""
+    # Robust port parsing to handle query quirks cleanly without throwing 422
+    clean_port = 8000
+    raw_port = str(port or "8000").strip()
+    if "?" in raw_port:
+        parts = raw_port.split("?", 1)
+        raw_port = parts[0]
+        # Recover 'p' if inadvertently attached after question mark
+        if not p and "=" in parts[1]:
+            for param in parts[1].split("&"):
+                if param.startswith("p="):
+                    p = param.split("=", 1)[1]
+    try:
+        clean_port = int(raw_port)
+    except (ValueError, TypeError):
+        clean_port = 8000
+
+    host_ip = ip.strip() if ip and ip.strip() else get_local_wifi_ip()
+    v_pin, pin_enabled = get_or_create_pin(video_id)
+    active_pin = (p or pin or v_pin).strip()
+
+    if pin_enabled and active_pin:
+        target_url = f"http://{host_ip}:{clean_port}/watch/{video_id}?p={active_pin}"
+    else:
+        target_url = f"http://{host_ip}:{clean_port}/watch/{video_id}"
+
+    svg_content = generate_qr_svg(target_url, border=4, scale=8)
+
+    return Response(
+        content=svg_content,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "no-cache"}
+    )
+
+
+@router.post("/{video_id}/verify-pin")
+async def verify_pin_endpoint(video_id: str, req: PinVerifyRequest, response: Response):
+    """Verifies a submitted PIN and issues a cryptographically signed session token."""
+    video = db_get_video(video_id)
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    success, token = verify_video_pin(video_id, req.pin)
+    if not success or not token:
+        raise HTTPException(status_code=401, detail="Incorrect PIN")
+
+    response.set_cookie(
+        key=f"vm_token_{video_id}",
+        value=token,
+        max_age=86400,
+        httponly=True,
+        samesite="lax"
+    )
+    return {"success": True, "token": token}
+
+
+@router.post("/{video_id}/security-pin")
+async def configure_pin_endpoint(video_id: str, req: PinConfigRequest, request: Request):
+    """Allows desktop owner to update PIN or toggle PIN protection."""
+    video = db_get_video(video_id)
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    if not is_client_localhost(request):
+        raise HTTPException(status_code=403, detail="Security settings can only be altered from this machine.")
+
+    pin, enabled = set_pin_config(video_id, req.pin, req.pin_enabled)
+    token = generate_stream_token(video_id)
+    return {"video_id": video_id, "pin": pin, "pin_enabled": enabled, "token": token}
+
+
+@router.post("/{video_id}/regenerate-pin")
+async def regenerate_pin_endpoint(video_id: str, request: Request):
+    """Generates a fresh 4-digit random security PIN."""
+    video = db_get_video(video_id)
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    if not is_client_localhost(request):
+        raise HTTPException(status_code=403, detail="Security settings can only be altered from this machine.")
+
+    import random
+    new_pin = f"{random.randint(1000, 9999)}"
+    set_pin_config(video_id, new_pin, pin_enabled=True)
+    token = generate_stream_token(video_id)
+    return {"video_id": video_id, "pin": new_pin, "pin_enabled": True, "token": token}

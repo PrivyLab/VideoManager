@@ -10,6 +10,7 @@ backend/storage/videos/*
 backend/storage/temp_chunks/*
 backend/storage/*.db
 backend/storage/*.json
+backend/storage/.*
 
 # Node & Frontend
 node_modules/

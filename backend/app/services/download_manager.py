@@ -1,9 +1,12 @@
 import asyncio
 import uuid
 import os
+import re
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, Set
+from urllib.parse import urlparse, unquote
 from fastapi import WebSocket
 
 from app.database import db_create_video, db_update_video, db_get_video, db_get_all_videos
@@ -12,6 +15,25 @@ from app.models import DownloadRequest
 from app.services.chunk_engine import ChunkEngine
 from app.services.ytdlp_downloader import YtDlpDownloader
 from app.services.video_stitcher import VideoStitcher
+from app.services.media_tools import probe_file
+
+logger = logging.getLogger(__name__)
+
+def sanitize_media_filename(name: str) -> str:
+    cleaned = re.sub(r'[\\/*?:"<>|]', "", name).strip()
+    return cleaned if cleaned else "video"
+
+def extract_filename_from_url(url: str, default_ext: str = ".mp4") -> str:
+    try:
+        parsed = urlparse(url)
+        path = unquote(parsed.path)
+        base = Path(path).name
+        clean_base = sanitize_media_filename(base)
+        if clean_base and "." in clean_base:
+            return clean_base
+    except Exception:
+        pass
+    return f"video_{int(datetime.utcnow().timestamp())}{default_ext}"
 
 class DownloadManager:
     def __init__(self):
@@ -166,33 +188,122 @@ class DownloadManager:
                         use_chunk_engine = True
 
                 if use_chunk_engine:
-                    engine = ChunkEngine(video_id)
+                    engine = ChunkEngine(video_id, referer=req.referer)
                     self.active_downloaders[video_id] = engine
 
-                    filename = f"{video_id}_video.mp4"
-                    if req.chunk_urls:
-                        final_path = await engine.download_segment_list(
-                            req.chunk_urls,
-                            output_filename=filename,
-                            output_dir=target_folder,
-                            progress_callback=progress_cb
-                        )
-                    else:
-                        final_path = await engine.download_with_chunking(
-                            req.url,
-                            output_filename=filename,
-                            num_chunks=req.custom_chunks or 4,
-                            output_dir=target_folder,
-                            progress_callback=progress_cb
-                        )
+                    filename = None
+                    if req.custom_title and req.custom_title.strip():
+                        sanitized = sanitize_media_filename(req.custom_title.strip())
+                        if not any(sanitized.lower().endswith(ext) for ext in [".mp4", ".mkv", ".webm", ".mov", ".ts", ".mp3"]):
+                            sanitized += ".mp4"
+                        filename = sanitized
+                    elif req.url:
+                        url_name = extract_filename_from_url(req.url)
+                        if url_name:
+                            filename = url_name
+
+                    if not filename:
+                        filename = f"{video_id}_video.mp4"
+
+                    candidate_path = target_folder / filename
+                    if candidate_path.exists():
+                        stem = candidate_path.stem
+                        suffix = candidate_path.suffix or ".mp4"
+                        filename = f"{stem}_{video_id[:8]}{suffix}"
+
+                    try:
+                        if req.chunk_urls:
+                            final_path = await engine.download_segment_list(
+                                req.chunk_urls,
+                                output_filename=filename,
+                                output_dir=target_folder,
+                                progress_callback=progress_cb
+                            )
+                        else:
+                            final_path = await engine.download_with_chunking(
+                                req.url,
+                                output_filename=filename,
+                                num_chunks=req.custom_chunks or 4,
+                                output_dir=target_folder,
+                                progress_callback=progress_cb
+                            )
+                    except Exception as chunk_err:
+                        if req.downloader_type == "auto" and not req.chunk_urls and not isinstance(chunk_err, asyncio.CancelledError):
+                            logger.warning(f"ChunkEngine encountered error ({chunk_err}), falling back to YtDlpDownloader for {req.url}")
+                            downloader = YtDlpDownloader(video_id)
+                            self.active_downloaders[video_id] = downloader
+                            res = await downloader.download(
+                                url=req.url,
+                                quality=req.quality or "best",
+                                output_dir=target_folder,
+                                referer=req.referer,
+                                use_tor=req.use_tor or False,
+                                custom_proxy=req.custom_proxy,
+                                cookies_from_browser=req.cookies_from_browser,
+                                routing_mode=req.routing_mode,
+                                trim_start=req.trim_start,
+                                trim_end=req.trim_end,
+                                progress_callback=progress_cb,
+                            )
+                            file_path = res.get("file_path")
+                            file_size = 0
+                            file_format = "mp4"
+                            if file_path and Path(file_path).exists():
+                                p = Path(file_path)
+                                file_size = p.stat().st_size
+                                file_format = p.suffix.replace(".", "")
+
+                            now = datetime.utcnow().isoformat()
+                            clean_fallback_title = res.get("title") or req.custom_title or (Path(file_path).stem if file_path else "Downloaded Video")
+                            updates = {
+                                "title": clean_fallback_title,
+                                "duration": res.get("duration", 0),
+                                "file_path": file_path or "",
+                                "file_size": file_size,
+                                "file_format": file_format,
+                                "thumbnail_url": res.get("thumbnail") or "",
+                                "resolution": res.get("resolution") or "",
+                                "status": "completed",
+                                "progress": 100.0,
+                                "speed": "",
+                                "eta": "",
+                                "downloader_type": "ytdlp",
+                                "completed_at": now
+                            }
+                            cleanup_video_artifacts(video_id, file_path=file_path, keep_final=True)
+                            db_update_video(video_id, updates)
+                            await self.broadcast({
+                                "event": "completed",
+                                "video_id": video_id,
+                                "video": db_get_video(video_id)
+                            })
+                            return
+                        else:
+                            raise chunk_err
 
                     file_size = final_path.stat().st_size if final_path.exists() else 0
                     now = datetime.utcnow().isoformat()
+
+                    duration = 0.0
+                    resolution = ""
+                    try:
+                        probe_data = probe_file(final_path)
+                        duration = probe_data.get("duration", 0.0)
+                        w = probe_data.get("width", 0)
+                        h = probe_data.get("height", 0)
+                        if w and h:
+                            resolution = f"{w}x{h}"
+                    except Exception:
+                        pass
+
+                    clean_title = req.custom_title or (final_path.stem if final_path.stem != video_id else final_path.name)
                     updates = {
-                        "title": req.custom_title or final_path.name,
+                        "title": clean_title,
+                        "duration": duration,
                         "file_path": str(final_path),
                         "file_size": file_size,
-                        "file_format": final_path.suffix.replace(".", ""),
+                        "file_format": final_path.suffix.replace(".", "") or "mp4",
+                        "resolution": resolution,
                         "status": "completed",
                         "progress": 100.0,
                         "speed": "",

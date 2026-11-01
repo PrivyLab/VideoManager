@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { X, Download, HardDrive, Clock, ExternalLink, AlertTriangle, Terminal, RefreshCw, Scissors } from 'lucide-react';
+import { X, Download, HardDrive, Clock, ExternalLink, AlertTriangle, Terminal, RefreshCw, Scissors, Smartphone } from 'lucide-react';
 import { VideoItem } from '../types';
 import { formatBytes, formatDuration } from '../api';
 
@@ -7,6 +7,7 @@ interface VideoPlayerModalProps {
   video: VideoItem | null;
   onClose: () => void;
   onOpenTrim?: (video: VideoItem) => void;
+  onOpenMobileStream?: (video: VideoItem) => void;
 }
 
 interface FileInfo {
@@ -17,7 +18,7 @@ interface FileInfo {
   stated_format: string;
 }
 
-export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClose, onOpenTrim }) => {
+export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClose, onOpenTrim, onOpenMobileStream }) => {
   const [fileInfo, setFileInfo] = useState<FileInfo | null>(null);
   const [infoLoading, setInfoLoading] = useState(false);
 
@@ -78,6 +79,17 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ video, onClo
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            {onOpenMobileStream && (
+              <button
+                type="button"
+                onClick={() => onOpenMobileStream(video)}
+                className="p-2 text-emerald-400 hover:text-white bg-dark-800 hover:bg-emerald-600/30 border border-emerald-500/20 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-medium"
+                title="Watch on Phone (Wi-Fi QR Code)"
+              >
+                <Smartphone className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Watch on Phone</span>
+              </button>
+            )}
             {onOpenTrim && (
               <button
                 type="button"

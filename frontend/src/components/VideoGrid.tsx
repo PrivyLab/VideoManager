@@ -16,7 +16,8 @@ import {
   Music,
   Scissors,
   Sparkles,
-  Minimize2
+  Minimize2,
+  Smartphone
 } from 'lucide-react';
 import { VideoItem } from '../types';
 import { formatBytes, formatDuration, deleteVideo, retryDownload } from '../api';
@@ -27,6 +28,7 @@ interface VideoGridProps {
   onRefresh: () => void;
   onOpenStitchModal: (selected: VideoItem[]) => void;
   onOpenMediaTools: (video: VideoItem, initialTab?: 'audio' | 'compress' | 'gif' | 'trim') => void;
+  onOpenMobileStream: (video: VideoItem) => void;
 }
 
 export const VideoGrid: React.FC<VideoGridProps> = ({
@@ -35,6 +37,7 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
   onRefresh,
   onOpenStitchModal,
   onOpenMediaTools,
+  onOpenMobileStream,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filter, setFilter] = useState<'all' | 'completed' | 'failed'>('all');
@@ -422,6 +425,16 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
                           >
                             <Download className="h-4 w-4" />
                           </a>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOpenMobileStream(video);
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-dark-700 rounded-lg transition-colors"
+                            title="Watch on Phone (Wi-Fi QR Code)"
+                          >
+                            <Smartphone className="h-4 w-4" />
+                          </button>
                         </>
                       ) : (
                         <button

@@ -208,6 +208,49 @@ export async function trimVideo(videoId: string, payload: TrimVideoPayload): Pro
   return res.json();
 }
 
+export interface VideoShareLink {
+  video_id: string;
+  title: string;
+  local_ip: string;
+  port: number;
+  watch_url: string;
+  stream_url: string;
+  qr_url: string;
+  token?: string;
+  pin?: string;
+  pin_enabled?: boolean;
+  encrypted?: boolean;
+  duration: number;
+  file_size: number;
+  file_format: string;
+}
+
+export async function getVideoShareLink(videoId: string, port?: number): Promise<VideoShareLink> {
+  const p = port || 8000;
+  const res = await fetch(`${API_BASE}/videos/${videoId}/share-link?port=${p}`);
+  if (!res.ok) throw new Error('Failed to get video share link');
+  return res.json();
+}
+
+export async function regeneratePin(videoId: string): Promise<{ pin: string; token: string }> {
+  const res = await fetch(`${API_BASE}/videos/${videoId}/regenerate-pin`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to regenerate PIN');
+  return res.json();
+}
+
+export async function updatePinConfig(
+  videoId: string,
+  payload: { pin?: string; pin_enabled?: boolean }
+): Promise<{ pin: string; pin_enabled: boolean; token: string }> {
+  const res = await fetch(`${API_BASE}/videos/${videoId}/security-pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error('Failed to update PIN security config');
+  return res.json();
+}
+
 export function formatBytes(bytes: number): string {
   if (!bytes || bytes === 0) return '0 B';
   const k = 1024;

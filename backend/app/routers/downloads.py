@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 from app.models import (
     DownloadRequest,
     InspectRequest,
@@ -10,20 +10,25 @@ from app.models import (
 from app.services.download_manager import download_manager
 from app.services.ytdlp_downloader import YtDlpDownloader
 from app.services.chunk_engine import ChunkEngine
+from app.services.stream_auth import is_client_localhost
 from app.database import db_get_video, db_get_all_videos
 
 router = APIRouter(prefix="/api/downloads", tags=["downloads"])
 
 @router.post("")
-async def create_download(req: DownloadRequest):
+async def create_download(req: DownloadRequest, request: Request):
+    if not is_client_localhost(request):
+        raise HTTPException(status_code=403, detail="Access denied: Downloads can only be initiated from localhost.")
     if not req.url:
         raise HTTPException(status_code=400, detail="Video URL is required")
     video_id = await download_manager.start_download(req)
     return {"success": True, "video_id": video_id}
 
 @router.post("/batch")
-async def create_batch_downloads(req: BatchDownloadRequest):
+async def create_batch_downloads(req: BatchDownloadRequest, request: Request):
     """Queues a batch of video URLs for sequential / concurrent downloading."""
+    if not is_client_localhost(request):
+        raise HTTPException(status_code=403, detail="Access denied: Downloads can only be initiated from localhost.")
     items_to_download = []
     if req.items and len(req.items) > 0:
         items_to_download = req.items

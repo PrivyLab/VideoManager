@@ -9,6 +9,7 @@ import { FolderPickerModal } from './components/FolderPickerModal';
 import { VideoStitchModal } from './components/VideoStitchModal';
 import { MediaToolsModal } from './components/MediaToolsModal';
 import { BookmarkletModal } from './components/BookmarkletModal';
+import { MobileStreamModal } from './components/MobileStreamModal';
 import { fetchVideos, getSystemSettings } from './api';
 import { VideoItem, SystemSettings } from './types';
 
@@ -24,6 +25,7 @@ export const App: React.FC = () => {
   const [autoStartDownload, setAutoStartDownload] = useState(false);
   const [stitchModalVideos, setStitchModalVideos] = useState<VideoItem[] | null>(null);
   const [mediaToolsTarget, setMediaToolsTarget] = useState<{ video: VideoItem; initialTab: 'audio' | 'compress' | 'gif' | 'trim' } | null>(null);
+  const [mobileStreamVideo, setMobileStreamVideo] = useState<VideoItem | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   // Read URL search params for incoming Bookmarklet downloads
@@ -180,6 +182,7 @@ export const App: React.FC = () => {
           onRefresh={loadVideos}
           onOpenStitchModal={(selected) => setStitchModalVideos(selected)}
           onOpenMediaTools={(video, initialTab = 'audio') => setMediaToolsTarget({ video, initialTab })}
+          onOpenMobileStream={(video) => setMobileStreamVideo(video)}
         />
       </main>
 
@@ -190,6 +193,10 @@ export const App: React.FC = () => {
         onOpenTrim={(video) => {
           setPlayingVideo(null);
           setMediaToolsTarget({ video, initialTab: 'trim' });
+        }}
+        onOpenMobileStream={(video) => {
+          setPlayingVideo(null);
+          setMobileStreamVideo(video);
         }}
       />
 
@@ -241,6 +248,14 @@ export const App: React.FC = () => {
       {/* Browser Bookmarklet Setup Modal */}
       {showBookmarklet && (
         <BookmarkletModal onClose={() => setShowBookmarklet(false)} />
+      )}
+
+      {/* Mobile Wi-Fi QR Streaming Modal */}
+      {mobileStreamVideo && (
+        <MobileStreamModal
+          video={mobileStreamVideo}
+          onClose={() => setMobileStreamVideo(null)}
+        />
       )}
     </div>
   );

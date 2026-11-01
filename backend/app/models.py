@@ -162,3 +162,10 @@ class CreateGifRequest(BaseModel):
     fps: Optional[int] = 15
     width: Optional[int] = 480
     title: Optional[str] = None
+
+class PinVerifyRequest(BaseModel):
+    pin: str
+
+class PinConfigRequest(BaseModel):
+    pin: Optional[str] = None
+    pin_enabled: Optional[bool] = None

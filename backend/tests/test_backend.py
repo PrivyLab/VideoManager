@@ -227,6 +227,298 @@ def test_batch_and_playlist_queuing():
     asyncio.run(run_batch_test())
     print("Batch & Playlist Queue Manager test: PASSED")
 
+def test_qr_and_mobile_stream():
+    from app.services.qr_generator import get_local_wifi_ip, generate_qr_svg
+
+    ip = get_local_wifi_ip()
+    assert ip and len(ip.split(".")) == 4
+
+    test_url = f"http://{ip}:8000/watch/test_mobile_stream"
+    svg = generate_qr_svg(test_url)
+    assert "<svg" in svg
+    assert "</svg>" in svg
+    assert "fill=\"#000000\"" in svg
+    print("QR Code & Wi-Fi Mobile Streaming test: PASSED")
+
+def test_byte_range_mobile_seeking():
+    from starlette.testclient import TestClient
+    from app.main import app
+    from app.database import db_create_video, db_delete_video
+    from app.services.faststart import is_mp4_faststart
+
+    client = TestClient(app)
+    test_id = "test_seek_video"
+
+    # Create a 2000-byte test file
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tf:
+        dummy_data = b"M4V " + (b"0123456789" * 199) + b"END!"
+        tf.write(dummy_data)
+        tf_path = tf.name
+
+    db_create_video({
+        "id": test_id,
+        "url": "https://example.com/test.mp4",
+        "title": "Mobile Seek Test Video",
+        "file_path": tf_path,
+        "file_size": len(dummy_data),
+        "status": "completed",
+        "created_at": "2026-11-01T00:00:00Z",
+    })
+
+    try:
+        # 1. HEAD request (mobile Safari probes this before playback)
+        r_head = client.head(f"/api/videos/{test_id}/stream")
+        assert r_head.status_code == 200, f"HEAD request failed: {r_head.status_code}"
+        assert r_head.headers.get("accept-ranges") == "bytes"
+        assert int(r_head.headers.get("content-length", 0)) == len(dummy_data)
+
+        # 2. Safari initial probe (Range: bytes=0-1)
+        r_probe = client.get(f"/api/videos/{test_id}/stream", headers={"Range": "bytes=0-1"})
+        assert r_probe.status_code == 206
+        assert r_probe.headers.get("content-range") == f"bytes 0-1/{len(dummy_data)}"
+        assert len(r_probe.content) == 2
+
+        # 3. Seeking forward (Range: bytes=500-999)
+        r_seek = client.get(f"/api/videos/{test_id}/stream", headers={"Range": "bytes=500-999"})
+        assert r_seek.status_code == 206
+        assert r_seek.headers.get("content-range") == f"bytes 500-999/{len(dummy_data)}"
+        assert len(r_seek.content) == 500
+        assert r_seek.content == dummy_data[500:1000]
+
+        # 4. Open-ended seek (Range: bytes=1500-)
+        r_open = client.get(f"/api/videos/{test_id}/stream", headers={"Range": "bytes=1500-"})
+        assert r_open.status_code == 206
+        assert r_open.headers.get("content-range") == f"bytes 1500-{len(dummy_data)-1}/{len(dummy_data)}"
+        assert len(r_open.content) == len(dummy_data) - 1500
+        assert r_open.content == dummy_data[1500:]
+
+        # 5. Suffix range for moov atom inspection (Range: bytes=-100)
+        r_suffix = client.get(f"/api/videos/{test_id}/stream", headers={"Range": "bytes=-100"})
+        assert r_suffix.status_code == 206
+        expected_start = len(dummy_data) - 100
+        assert r_suffix.headers.get("content-range") == f"bytes {expected_start}-{len(dummy_data)-1}/{len(dummy_data)}"
+        assert len(r_suffix.content) == 100
+        assert r_suffix.content == dummy_data[-100:]
+
+        # 6. Mobile HTML watch page contains touch seek controls
+        r_watch = client.get(f"/watch/{test_id}")
+        assert r_watch.status_code == 200
+        assert "seekBy" in r_watch.text
+        assert "touch-controls" in r_watch.text
+        assert "preload=\"auto\"" in r_watch.text
+
+        print("HTTP Byte-Range Mobile Seeking test: PASSED")
+    finally:
+        db_delete_video(test_id)
+        if os.path.exists(tf_path):
+            os.unlink(tf_path)
+
+def test_stream_encryption_and_pin_security():
+    from starlette.testclient import TestClient
+    from app.main import app
+    from app.database import db_create_video, db_delete_video
+    from app.services.stream_auth import (
+        generate_stream_token,
+        verify_stream_token,
+        get_or_create_pin,
+        verify_video_pin,
+        set_pin_config,
+    )
+    import tempfile
+
+    test_id = "test_enc_video"
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tf:
+        tf.write(b"M4V " + (b"secure_stream_bytes_" * 50))
+        tf_path = tf.name
+
+    db_create_video({
+        "id": test_id,
+        "url": "https://example.com/secure.mp4",
+        "title": "Encrypted Test Video",
+        "file_path": tf_path,
+        "file_size": os.path.getsize(tf_path),
+        "status": "completed",
+        "created_at": "2026-11-01T00:00:00Z",
+    })
+
+    try:
+        # 1. Cryptographic HMAC Token generation & tamper detection
+        token = generate_stream_token(test_id)
+        assert verify_stream_token(token, test_id) is True
+        assert verify_stream_token(token, "wrong_video_id") is False
+        assert verify_stream_token(token + "corrupt", test_id) is False
+
+        # 2. PIN generation and verification
+        pin, enabled = get_or_create_pin(test_id)
+        assert len(pin) >= 4 and pin.isdigit()
+        assert enabled is True
+
+        # Incorrect PIN fails
+        valid, _ = verify_video_pin(test_id, "0000_wrong")
+        assert valid is False
+
+        # Correct PIN succeeds and returns a valid cryptographic token
+        valid, issued_token = verify_video_pin(test_id, pin)
+        assert valid is True
+        assert verify_stream_token(issued_token, test_id) is True
+
+        client = TestClient(app)
+
+        # 3. Share link endpoint returns token and PIN metadata
+        share_res = client.get(f"/api/videos/{test_id}/share-link")
+        assert share_res.status_code == 200
+        data = share_res.json()
+        assert data["encrypted"] is True
+        assert "token" in data
+        assert "pin" in data
+        assert "p=" in data["watch_url"]
+
+        # 4. PIN verification API endpoint
+        v_res = client.post(f"/api/videos/{test_id}/verify-pin", json={"pin": pin})
+        assert v_res.status_code == 200
+        assert v_res.json()["success"] is True
+        assert "token" in v_res.json()
+
+        # Wrong PIN returns 401
+        v_fail = client.post(f"/api/videos/{test_id}/verify-pin", json={"pin": "99999999"})
+        assert v_fail.status_code == 401
+
+        # 5. Mobile Watch page with ?p={pin} auto-authenticates from QR code
+        w_res_pin = client.get(f"/watch/{test_id}?p={pin}")
+        assert w_res_pin.status_code == 200
+        assert "player" in w_res_pin.text
+        assert "Encrypted Wi-Fi Stream" in w_res_pin.text
+
+        # 6. Mobile Watch page with token renders player
+        w_res = client.get(f"/watch/{test_id}?token={token}")
+        assert w_res.status_code == 200
+        assert "player" in w_res.text
+        assert "Encrypted Wi-Fi Stream" in w_res.text
+
+        # 6. Stream with token query param succeeds
+        s_res = client.get(f"/api/videos/{test_id}/stream?token={token}")
+        assert s_res.status_code == 200
+        assert b"secure_stream_bytes" in s_res.content
+
+        print("Wi-Fi Stream Cryptographic Encryption & PIN Security test: PASSED")
+    finally:
+        db_delete_video(test_id)
+        if os.path.exists(tf_path):
+            os.unlink(tf_path)
+
+def test_single_direct_video_stream():
+    import asyncio
+    import httpx
+    from app.services.download_manager import extract_filename_from_url, sanitize_media_filename
+
+    # 1. Test clean filename extraction for URLs like arhivach
+    arhivach_url = "https://i.arhivach.vc/storage/1/60/16055607962ecb14d267630ffb206652.mp4"
+    extracted = extract_filename_from_url(arhivach_url)
+    assert extracted == "16055607962ecb14d267630ffb206652.mp4"
+
+    dirty_title = 'My: Cool "Video" <123>?*'
+    sanitized = sanitize_media_filename(dirty_title)
+    assert sanitized == "My Cool Video 123"
+
+    # 2. Mock HTTP server that DOES NOT support Range requests (returns 200, no accept-ranges)
+    video_bytes = b"\x00\x00\x00 ftypisom" + b"A" * 10240
+
+    def mock_handler(request: httpx.Request):
+        # Emulate servers like arhivach or CDNs without range support
+        # HEAD returns 405 Method Not Allowed
+        if request.method == "HEAD":
+            return httpx.Response(405, headers={"Allow": "GET"})
+        if request.method == "GET":
+            # Normal GET response with no Accept-Ranges header
+            return httpx.Response(
+                200,
+                headers={
+                    "Content-Type": "video/mp4",
+                    "Content-Length": str(len(video_bytes))
+                },
+                content=video_bytes
+            )
+        return httpx.Response(400)
+
+    transport = httpx.MockTransport(mock_handler)
+    mock_client = httpx.AsyncClient(transport=transport)
+
+    test_id = "test_single_stream_vid"
+    engine = ChunkEngine(test_id, client=mock_client)
+    out_dir = Path("/tmp/test_single_stream_out")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = "16055607962ecb14d267630ffb206652.mp4"
+
+    progress_events = []
+    def on_progress(p):
+        progress_events.append(p)
+
+    async def run_direct_download():
+        return await engine.download_with_chunking(
+            url=arhivach_url,
+            output_filename=out_file,
+            num_chunks=4,
+            output_dir=out_dir,
+            progress_callback=on_progress
+        )
+
+    res_path = asyncio.run(run_direct_download())
+    assert res_path.exists()
+    assert res_path.stat().st_size == len(video_bytes)
+    with open(res_path, "rb") as f:
+        assert f.read() == video_bytes
+
+    # Ensure progress callback was called and completed
+    assert any(p.get("status") == "completed" for p in progress_events)
+    # Ensure temporary work dir was cleaned up
+    assert not engine.work_dir.exists()
+
+    if res_path.exists():
+        res_path.unlink()
+
+    print("Single direct video stream (non-range) test: PASSED")
+
+def test_desktop_security_boundaries():
+    from starlette.testclient import TestClient
+    from app.main import app
+
+    # Simulated phone client on local Wi-Fi (IP: 192.168.1.55)
+    phone = TestClient(app, client=("192.168.1.55", 54321))
+
+    # 1. Phone attempting to access Desktop SPA Dashboard -> 403 HTML Forbidden
+    r_root = phone.get("/")
+    assert r_root.status_code == 403
+    assert "Desktop Only Area" in r_root.text
+
+    # 2. Phone attempting to browse host file system -> 403 Forbidden
+    r_browse = phone.get("/api/system/browse-folders")
+    assert r_browse.status_code == 403
+    assert "Access denied" in r_browse.json()["detail"]
+
+    # 3. Phone attempting to view or change download directory -> 403 Forbidden
+    r_settings = phone.get("/api/system/settings")
+    assert r_settings.status_code == 403
+
+    r_set_post = phone.post("/api/system/settings", json={"download_folder": "/tmp"})
+    assert r_set_post.status_code == 403
+
+    # 4. Phone attempting to list entire video library -> 403 Forbidden
+    r_vids = phone.get("/api/videos")
+    assert r_vids.status_code == 403
+
+    # 5. Phone attempting to trigger downloads on laptop -> 403 Forbidden
+    r_dl = phone.post("/api/downloads", json={"url": "https://example.com/test.mp4"})
+    assert r_dl.status_code == 403
+
+    # 6. Localhost Desktop user retains full access
+    desktop = TestClient(app, client=("127.0.0.1", 54321))
+    r_desk_sys = desktop.get("/api/system/settings")
+    assert r_desk_sys.status_code == 200
+    assert "download_folder" in r_desk_sys.json()
+
+    print("Desktop Security & Wi-Fi Boundaries test: PASSED")
+
 if __name__ == "__main__":
     test_db_operations()
     test_chunk_engine_merging()
@@ -235,4 +527,9 @@ if __name__ == "__main__":
     test_media_tools()
     test_video_trimmer()
     test_batch_and_playlist_queuing()
+    test_qr_and_mobile_stream()
+    test_byte_range_mobile_seeking()
+    test_stream_encryption_and_pin_security()
+    test_single_direct_video_stream()
+    test_desktop_security_boundaries()
     print("ALL TESTS PASSED SUCCESSFULLY!")

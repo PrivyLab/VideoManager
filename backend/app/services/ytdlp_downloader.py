@@ -283,6 +283,10 @@ class YtDlpDownloader:
         ydl_opts: Dict[str, Any] = {
             'format': format_selector,
             'outtmpl': out_template,
+            'merge_output_format': 'mp4',
+            'postprocessor_args': {
+                'Merger': ['-movflags', '+faststart'],
+            },
             'progress_hooks': [hook],
             'noplaylist': True,
             'quiet': True,

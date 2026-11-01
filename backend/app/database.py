@@ -34,6 +34,14 @@ def init_db():
         completed_at TEXT
     )
     """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS stream_security (
+        video_id TEXT PRIMARY KEY,
+        pin TEXT NOT NULL,
+        pin_enabled INTEGER DEFAULT 1,
+        created_at TEXT NOT NULL
+    )
+    """)
     conn.commit()
     conn.close()
 
@@ -84,6 +92,30 @@ def db_delete_video(video_id: str):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM videos WHERE id = ?", (video_id,))
+    cursor.execute("DELETE FROM stream_security WHERE video_id = ?", (video_id,))
     conn.commit()
     conn.close()
+
+def db_get_stream_security(video_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM stream_security WHERE video_id = ?", (video_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def db_set_stream_security(video_id: str, pin: str, pin_enabled: bool = True):
+    conn = get_connection()
+    cursor = conn.cursor()
+    now = datetime.utcnow().isoformat()
+    cursor.execute("""
+        INSERT INTO stream_security (video_id, pin, pin_enabled, created_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(video_id) DO UPDATE SET
+            pin = excluded.pin,
+            pin_enabled = excluded.pin_enabled
+    """, (video_id, pin, 1 if pin_enabled else 0, now))
+    conn.commit()
+    conn.close()
+
 

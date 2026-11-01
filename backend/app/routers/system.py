@@ -4,7 +4,7 @@ import asyncio
 import socket
 from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from app.config import (
     get_configured_download_dir,
     set_configured_download_dir,
@@ -14,11 +14,17 @@ from app.config import (
     TOR_PROXY_ENV,
 )
 from app.models import SystemSettings, FolderBrowseResponse, FolderBrowseItem
+from app.services.stream_auth import is_client_localhost
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
 @router.get("/settings")
-async def get_settings():
+async def get_settings(request: Request):
+    if not is_client_localhost(request):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: System settings can only be accessed locally on this machine."
+        )
     current_dir = get_configured_download_dir()
     total, used, free = shutil.disk_usage(str(current_dir))
     return {
@@ -29,7 +35,12 @@ async def get_settings():
     }
 
 @router.post("/settings")
-async def update_settings(settings: SystemSettings):
+async def update_settings(settings: SystemSettings, request: Request):
+    if not is_client_localhost(request):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: System settings can only be modified locally on this machine."
+        )
     folder_str = settings.download_folder.strip()
     if not folder_str:
         raise HTTPException(status_code=400, detail="Folder path cannot be empty")
@@ -43,7 +54,12 @@ async def update_settings(settings: SystemSettings):
         raise HTTPException(status_code=400, detail=f"Cannot use folder: {str(e)}")
 
 @router.get("/browse-folders", response_model=FolderBrowseResponse)
-async def browse_folders(path: Optional[str] = Query(None)):
+async def browse_folders(request: Request, path: Optional[str] = Query(None)):
+    if not is_client_localhost(request):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: File system browsing is strictly restricted to this computer (localhost)."
+        )
     if not path or path == "~":
         target = Path.home()
     else:
