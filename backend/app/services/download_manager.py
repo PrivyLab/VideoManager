@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional, Set
 from fastapi import WebSocket
 
 from app.database import db_create_video, db_update_video, db_get_video, db_get_all_videos
-from app.config import get_configured_download_dir
+from app.config import get_configured_download_dir, cleanup_video_artifacts
 from app.models import DownloadRequest
 from app.services.chunk_engine import ChunkEngine
 from app.services.ytdlp_downloader import YtDlpDownloader
@@ -77,6 +77,8 @@ class DownloadManager:
         if video_id in self.active_tasks:
             self.active_tasks[video_id].cancel()
             self.active_tasks.pop(video_id, None)
+
+        cleanup_video_artifacts(video_id, keep_final=False)
 
         db_update_video(video_id, {
             "status": "cancelled",
@@ -185,6 +187,7 @@ class DownloadManager:
                     "downloader_type": "chunked",
                     "completed_at": now
                 }
+                cleanup_video_artifacts(video_id, file_path=str(final_path), keep_final=True)
                 db_update_video(video_id, updates)
                 await self.broadcast({
                     "event": "completed",
@@ -231,6 +234,7 @@ class DownloadManager:
                     "downloader_type": "ytdlp",
                     "completed_at": now
                 }
+                cleanup_video_artifacts(video_id, file_path=file_path, keep_final=True)
                 db_update_video(video_id, updates)
                 await self.broadcast({
                     "event": "completed",
@@ -239,6 +243,7 @@ class DownloadManager:
                 })
 
         except asyncio.CancelledError:
+            cleanup_video_artifacts(video_id, keep_final=False)
             db_update_video(video_id, {"status": "cancelled", "error_message": "Cancelled"})
             await self.broadcast({
                 "event": "progress",
@@ -247,6 +252,7 @@ class DownloadManager:
                 "message": "Download was cancelled."
             })
         except Exception as e:
+            cleanup_video_artifacts(video_id, keep_final=False)
             err = str(e)
             db_update_video(video_id, {"status": "failed", "error_message": err})
             await self.broadcast({

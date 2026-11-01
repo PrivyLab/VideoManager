@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 from app.database import init_db
+from app.config import cleanup_orphaned_temp_files
 from app.routers import downloads, videos, websocket, system
 
 app = FastAPI(
@@ -21,8 +22,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize Database
+# Initialize Database and clean orphaned fragments from previous runs
 init_db()
+cleanup_orphaned_temp_files()
 
 # Include API Routers
 app.include_router(downloads.router)

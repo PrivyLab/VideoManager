@@ -4,7 +4,7 @@ from typing import Optional, Tuple
 from fastapi import APIRouter, HTTPException, Header, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
 from app.database import db_get_all_videos, db_get_video, db_delete_video
-from app.config import DEFAULT_VIDEOS_DIR, VIDEOS_DIR
+from app.config import DEFAULT_VIDEOS_DIR, VIDEOS_DIR, cleanup_video_artifacts
 from app.models import StitchRequest
 from app.services.download_manager import download_manager
 from app.services.video_stitcher import VideoStitcher
@@ -181,13 +181,7 @@ async def delete_video(video_id: str):
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    file_path = video.get("file_path")
-    if file_path and os.path.exists(file_path):
-        try:
-            os.remove(file_path)
-        except Exception:
-            pass
-
+    cleanup_video_artifacts(video_id, video.get("file_path"))
     db_delete_video(video_id)
     return {"success": True}
 

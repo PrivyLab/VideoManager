@@ -34,6 +34,7 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
   const [filter, setFilter] = useState<'all' | 'completed' | 'failed'>('all');
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const completedVideos = videos.filter((v) => v.status === 'completed');
 
@@ -91,23 +92,38 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
             Video Library ({videos.length})
           </h3>
 
-          {/* Stitch Mode Toggle Button */}
-          {completedVideos.length >= 2 && (
-            <button
-              onClick={() => {
-                setIsSelectionMode(!isSelectionMode);
-                if (isSelectionMode) setSelectedIds([]);
-              }}
-              className={`px-2.5 py-1 text-xs rounded-lg flex items-center gap-1.5 transition-all font-medium border ${
-                isSelectionMode
-                  ? 'bg-brand-500/20 text-brand-300 border-brand-500/40 shadow-sm'
-                  : 'bg-dark-800 text-slate-300 border-dark-700 hover:text-white hover:border-dark-600'
-              }`}
-            >
-              <Layers className="h-3.5 w-3.5 text-brand-400" />
-              <span>{isSelectionMode ? 'Cancel Selection' : 'Stitch Videos'}</span>
-            </button>
-          )}
+          {/* Stitch Mode Action Button */}
+          <button
+            onClick={() => {
+              if (completedVideos.length < 2) {
+                setNotice('Download at least 2 videos first to stitch them together.');
+                setTimeout(() => setNotice(null), 4000);
+                return;
+              }
+              setIsSelectionMode(!isSelectionMode);
+              if (isSelectionMode) setSelectedIds([]);
+            }}
+            className={`px-3 py-1.5 text-xs rounded-xl flex items-center gap-1.5 transition-all font-medium border shadow-sm ${
+              isSelectionMode
+                ? 'bg-brand-500/20 text-brand-300 border-brand-500/50 shadow-brand-500/10'
+                : completedVideos.length >= 2
+                ? 'bg-dark-800 text-slate-200 border-dark-700 hover:text-white hover:border-brand-500/40 hover:bg-dark-700'
+                : 'bg-dark-800/60 text-slate-400 border-dark-700/80 hover:text-slate-300'
+            }`}
+            title={
+              completedVideos.length >= 2
+                ? 'Select multiple videos and stitch them together'
+                : 'Download at least 2 videos to use the stitch tool'
+            }
+          >
+            <Layers className="h-3.5 w-3.5 text-brand-400" />
+            <span>{isSelectionMode ? 'Cancel Selection' : 'Stitch Videos'}</span>
+            {completedVideos.length >= 2 && !isSelectionMode && (
+              <span className="text-[10px] bg-brand-500/20 text-brand-400 px-1.5 py-0.2 rounded-full font-mono">
+                {completedVideos.length} ready
+              </span>
+            )}
+          </button>
         </div>
 
         <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -152,6 +168,15 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
           </div>
         </div>
       </div>
+
+      {notice && (
+        <div className="p-3 bg-brand-500/10 border border-brand-500/30 rounded-xl text-brand-300 text-xs flex items-center justify-between animate-in fade-in duration-200">
+          <span>{notice}</span>
+          <button onClick={() => setNotice(null)} className="text-slate-400 hover:text-white p-1">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Grid or Empty State */}
       {filteredVideos.length === 0 ? (

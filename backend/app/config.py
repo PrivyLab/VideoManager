@@ -69,3 +69,58 @@ def set_configured_download_dir(path_str: str) -> Path:
     with open(SETTINGS_FILE, "w") as f:
         json.dump({"download_folder": str(p)}, f)
     return p
+
+def cleanup_orphaned_temp_files():
+    """Removes leftover .part, .ytdl, and -Frag* files from storage."""
+    import shutil
+    storage_dirs = [DEFAULT_VIDEOS_DIR, get_configured_download_dir()]
+    for sdir in set(storage_dirs):
+        if not sdir.exists():
+            continue
+        for p in sdir.glob("*"):
+            if p.is_file() and (p.name.endswith((".part", ".ytdl")) or "-Frag" in p.name):
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
+    if CHUNKS_DIR.exists():
+        for d in CHUNKS_DIR.glob("*"):
+            if d.is_dir():
+                try:
+                    shutil.rmtree(d, ignore_errors=True)
+                except Exception:
+                    pass
+
+def cleanup_video_artifacts(video_id: str, file_path: Optional[str] = None, keep_final: bool = False):
+    """
+    Clean up temporary fragments, .part, .ytdl, and chunks for a video ID.
+    If keep_final is False, also deletes the final video file and thumbnail.
+    """
+    import shutil
+    storage_dirs = [DEFAULT_VIDEOS_DIR, get_configured_download_dir()]
+    if file_path:
+        storage_dirs.append(Path(file_path).parent)
+
+    for sdir in set(storage_dirs):
+        if not sdir.exists():
+            continue
+        for f in sdir.glob(f"*{video_id}*"):
+            try:
+                if keep_final:
+                    # Only delete temporary files (.part, .ytdl, fragments)
+                    if f.name.endswith((".part", ".ytdl")) or "-Frag" in f.name:
+                        f.unlink()
+                else:
+                    if f.is_file():
+                        f.unlink()
+                    elif f.is_dir():
+                        shutil.rmtree(f, ignore_errors=True)
+            except Exception:
+                pass
+
+    chunk_dir = CHUNKS_DIR / video_id
+    if chunk_dir.exists():
+        try:
+            shutil.rmtree(chunk_dir, ignore_errors=True)
+        except Exception:
+            pass
