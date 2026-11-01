@@ -207,6 +207,7 @@ class DownloadManager:
                     use_tor=req.use_tor or False,
                     custom_proxy=req.custom_proxy,
                     cookies_from_browser=req.cookies_from_browser,
+                    routing_mode=req.routing_mode,
                     progress_callback=progress_cb,
                 )
 

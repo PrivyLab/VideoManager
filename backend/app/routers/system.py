@@ -5,7 +5,14 @@ import socket
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
-from app.config import get_configured_download_dir, set_configured_download_dir, DEFAULT_VIDEOS_DIR
+from app.config import (
+    get_configured_download_dir,
+    set_configured_download_dir,
+    DEFAULT_VIDEOS_DIR,
+    RUNNING_IN_DOCKER,
+    WARP_PROXY_ENV,
+    TOR_PROXY_ENV,
+)
 from app.models import SystemSettings, FolderBrowseResponse, FolderBrowseItem
 
 router = APIRouter(prefix="/api/system", tags=["system"])
@@ -67,6 +74,67 @@ async def browse_folders(path: Optional[str] = Query(None)):
         parent_path=parent_path,
         folders=folders
     )
+
+@router.get("/network-status")
+async def network_status():
+    """
+    Returns Docker status and probing results for both Cloudflare WARP and Tor SOCKS5 proxies.
+    """
+    def _check_warp():
+        if WARP_PROXY_ENV and WARP_PROXY_ENV.strip():
+            url = WARP_PROXY_ENV.strip()
+            parts = url.replace("socks5://", "").replace("http://", "").split(":")
+            host = parts[0]
+            port = int(parts[1]) if len(parts) > 1 else 1080
+            try:
+                s = socket.create_connection((host, port), timeout=0.6)
+                s.close()
+                return {"available": True, "proxy": url, "source": "Docker WARP Service", "is_active": True, "message": "Cloudflare WARP (Docker) Active ✅"}
+            except Exception:
+                return {"available": False, "proxy": url, "source": "Docker WARP Service", "is_active": False, "message": "Docker WARP container starting..."}
+
+        for host, port in [("warp", 1080), ("127.0.0.1", 1080)]:
+            try:
+                s = socket.create_connection((host, port), timeout=0.6)
+                s.close()
+                return {"available": True, "proxy": f"socks5://{host}:{port}", "source": "Cloudflare WARP", "is_active": True, "message": "Cloudflare WARP Active ✅"}
+            except Exception:
+                pass
+        return {"available": False, "proxy": "socks5://warp:1080", "source": "Cloudflare WARP", "is_active": False, "message": "Available in Docker mode (`docker compose up`)."}
+
+    def _check_tor():
+        if TOR_PROXY_ENV and TOR_PROXY_ENV.strip():
+            url = TOR_PROXY_ENV.strip()
+            parts = url.replace("socks5://", "").split(":")
+            host = parts[0]
+            port = int(parts[1]) if len(parts) > 1 else 9050
+            try:
+                s = socket.create_connection((host, port), timeout=0.6)
+                s.close()
+                return {"available": True, "proxy": url, "source": "Docker Tor Service", "is_active": True, "message": "Tor Network (Docker) Active ✅"}
+            except Exception:
+                return {"available": False, "proxy": url, "source": "Docker Tor Service", "is_active": False, "message": "Docker Tor container starting..."}
+
+        for host, port, label in [("127.0.0.1", 9150, "Tor Browser"), ("127.0.0.1", 9050, "Tor Daemon / Docker"), ("tor", 9050, "Docker Tor Container")]:
+            try:
+                s = socket.create_connection((host, port), timeout=0.6)
+                s.close()
+                return {"available": True, "proxy": f"socks5://{host}:{port}", "source": label, "is_active": True, "message": f"{label} Active ✅"}
+            except Exception:
+                pass
+        return {"available": False, "proxy": "socks5://127.0.0.1:9150", "source": "Tor", "is_active": False, "message": "Tor not running. Open Tor Browser or start Docker Compose."}
+
+    loop = asyncio.get_running_loop()
+    warp_res, tor_res = await asyncio.gather(
+        loop.run_in_executor(None, _check_warp),
+        loop.run_in_executor(None, _check_tor)
+    )
+
+    return {
+        "in_docker": RUNNING_IN_DOCKER,
+        "warp": warp_res,
+        "tor": tor_res,
+    }
 
 @router.get("/tor-status")
 async def tor_status():

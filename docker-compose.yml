@@ -10,7 +10,9 @@ services:
       - "8000:8000"
     environment:
       - DOWNLOAD_DIR=/downloads
+      - RUNNING_IN_DOCKER=true
       - TOR_PROXY=socks5://tor:9050
+      - WARP_PROXY=socks5://warp:1080
     volumes:
       # Mount host folder so downloaded videos are accessible directly on your host machine
       - ./downloads:/downloads
@@ -18,6 +20,7 @@ services:
       - ./data:/app/storage
     depends_on:
       - tor
+      - warp
     restart: unless-stopped
 
   tor:
@@ -30,3 +33,17 @@ services:
     ports:
       - "9050:9050"
     restart: unless-stopped
+
+  warp:
+    image: caomingjun/warp
+    container_name: videomanager-warp
+    restart: unless-stopped
+    ports:
+      - "1080:1080"
+    environment:
+      - WARP_SLEEP=2
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+      - net.ipv4.conf.all.src_valid_mark=1

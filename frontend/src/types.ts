@@ -58,6 +58,22 @@ export interface DownloadRequestPayload {
   referer?: string;
   use_tor?: boolean;
   custom_proxy?: string;
+  routing_mode?: 'direct' | 'warp' | 'tor';
+}
+
+export interface ProxyEndpointStatus {
+  available: boolean;
+  proxy: string;
+  source: string;
+  is_active: boolean;
+  exit_ip?: string | null;
+  message: string;
+}
+
+export interface NetworkStatusResponse {
+  in_docker: boolean;
+  warp: ProxyEndpointStatus;
+  tor: ProxyEndpointStatus;
 }
 
 export interface TorStatus {

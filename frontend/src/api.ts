@@ -6,7 +6,8 @@ import {
   FolderBrowseResponse,
   TorStatus,
   StitchRequestPayload,
-  StitchPreviewResponse
+  StitchPreviewResponse,
+  NetworkStatusResponse,
 } from './types';
 
 const API_BASE = '/api';
@@ -85,6 +86,12 @@ export async function browseFolders(path?: string): Promise<FolderBrowseResponse
 export async function getTorStatus(): Promise<TorStatus> {
   const res = await fetch(`${API_BASE}/system/tor-status`);
   if (!res.ok) throw new Error('Failed to check Tor status');
+  return res.json();
+}
+
+export async function getNetworkStatus(): Promise<NetworkStatusResponse> {
+  const res = await fetch(`${API_BASE}/system/network-status`);
+  if (!res.ok) throw new Error('Failed to check network status');
   return res.json();
 }
 

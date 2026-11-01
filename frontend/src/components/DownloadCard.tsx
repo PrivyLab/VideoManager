@@ -2,10 +2,10 @@ import React, { useState, useEffect } from 'react';
 import {
   Download, Search, Settings2, Sparkles, CheckCircle2, AlertCircle,
   Layers, Split, Folder, Shield, Globe, Cookie, Wifi, WifiOff, Loader2,
-  ExternalLink
+  ExternalLink, Zap
 } from 'lucide-react';
-import { inspectUrl, startDownload, formatDuration, getTorStatus } from '../api';
-import { InspectResult, TorStatus } from '../types';
+import { inspectUrl, startDownload, formatDuration, getTorStatus, getNetworkStatus } from '../api';
+import { InspectResult, TorStatus, NetworkStatusResponse } from '../types';
 
 interface DownloadCardProps {
   currentFolder?: string;
@@ -38,28 +38,42 @@ export const DownloadCard: React.FC<DownloadCardProps> = ({
   const [customProxy, setCustomProxy] = useState('');
   const [cookiesFromBrowser, setCookiesFromBrowser] = useState('');
   const [torStatus, setTorStatus] = useState<TorStatus | null>(null);
+  const [networkStatus, setNetworkStatus] = useState<NetworkStatusResponse | null>(null);
+  const [routingMode, setRoutingMode] = useState<'direct' | 'warp' | 'tor'>('direct');
   const [checkingTor, setCheckingTor] = useState(false);
 
   // UI state
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showAntiBlock, setShowAntiBlock] = useState(false);
 
-  const checkTorStatus = async () => {
+  const checkNetwork = async () => {
     setCheckingTor(true);
     try {
-      const status = await getTorStatus();
-      setTorStatus(status);
+      const net = await getNetworkStatus();
+      setNetworkStatus(net);
+      setTorStatus({
+        running: net.tor.is_active,
+        proxy: net.tor.proxy,
+        source: net.tor.source,
+        message: net.tor.message,
+      });
     } catch {
-      setTorStatus(null);
+      // Fallback to basic tor status
+      try {
+        const status = await getTorStatus();
+        setTorStatus(status);
+      } catch {
+        setTorStatus(null);
+      }
     } finally {
       setCheckingTor(false);
     }
   };
 
-  // Auto-check Tor when anti-block panel opens
+  // Auto-check network status when anti-block panel opens
   useEffect(() => {
-    if (showAntiBlock && !torStatus) {
-      checkTorStatus();
+    if (showAntiBlock && !networkStatus) {
+      checkNetwork();
     }
   }, [showAntiBlock]);
 
@@ -105,7 +119,8 @@ export const DownloadCard: React.FC<DownloadCardProps> = ({
         download_folder: customFolderOverride.trim() || currentFolder || undefined,
         // Anti-blocking
         referer: referer.trim() || undefined,
-        use_tor: useTor,
+        use_tor: routingMode === 'tor' || useTor,
+        routing_mode: routingMode,
         custom_proxy: customProxy.trim() || undefined,
         cookies_from_browser: cookiesFromBrowser || undefined,
       });
@@ -359,64 +374,184 @@ export const DownloadCard: React.FC<DownloadCardProps> = ({
                 </p>
               </div>
 
-              {/* Tor Toggle */}
-              <div>
-                <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5 mb-1.5">
-                  <Shield className="h-3.5 w-3.5 text-purple-400" />
-                  Route Through Tor
-                </label>
+              {/* Network Routing / Tor / Cloudflare WARP */}
+              {networkStatus?.in_docker ? (
+                <div className="col-span-1 sm:col-span-2 space-y-3 pt-2 border-t border-dark-700/60">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                      <Shield className="h-3.5 w-3.5 text-purple-400" />
+                      Docker Network Routing
+                    </label>
+                    <span className="text-[10px] bg-blue-500/10 text-blue-400 border border-blue-500/20 px-2 py-0.5 rounded-full font-mono flex items-center gap-1">
+                      🐳 Docker Mode Active
+                    </span>
+                  </div>
 
-                {/* Tor Status Badge */}
-                <div className={`border rounded-xl p-2.5 mb-2 text-xs ${torBg}`}>
-                  <div className={`flex items-center justify-between ${torColor}`}>
-                    <div className="flex items-center gap-1.5">
-                      {checkingTor ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : torStatus?.running ? (
-                        <Wifi className="h-3.5 w-3.5" />
-                      ) : (
-                        <WifiOff className="h-3.5 w-3.5" />
-                      )}
-                      <span className="font-mono text-[11px]">
-                        {checkingTor ? 'Checking Tor...'
-                          : torStatus?.running
-                            ? torStatus.is_tor
-                              ? `✅ ${torStatus.source || 'Tor'} Active (Exit IP: ${torStatus.exit_ip})`
-                              : `✅ ${torStatus.source || 'Tor'} Ready (${torStatus.proxy})`
-                            : '❌ Tor not detected'}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    {/* Direct */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRoutingMode('direct');
+                        setUseTor(false);
+                      }}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        routingMode === 'direct'
+                          ? 'border-brand-500 bg-brand-500/10 text-white shadow-sm ring-1 ring-brand-500/30'
+                          : 'border-dark-700 bg-dark-800/60 text-slate-300 hover:border-dark-600'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 text-xs font-semibold">
+                        <Zap className="h-3.5 w-3.5 text-brand-400" />
+                        <span>Direct (Default)</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 mt-1 leading-snug">
+                        Normal broadband speed. No proxy or tunneling overhead.
+                      </p>
+                    </button>
+
+                    {/* Cloudflare WARP */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRoutingMode('warp');
+                        setUseTor(false);
+                      }}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        routingMode === 'warp'
+                          ? 'border-orange-500 bg-orange-500/10 text-white shadow-sm ring-1 ring-orange-500/30'
+                          : 'border-dark-700 bg-dark-800/60 text-slate-300 hover:border-dark-600'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 text-xs font-semibold">
+                          <Globe className="h-3.5 w-3.5 text-orange-400" />
+                          <span>Cloudflare WARP</span>
+                        </div>
+                        {networkStatus?.warp.available && (
+                          <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-sm shadow-emerald-400/50" />
+                        )}
+                      </div>
+                      <p className="text-[10px] text-slate-400 mt-1 leading-snug">
+                        Full gigabit speed. Masks IP via Cloudflare's global edge network.
+                      </p>
+                    </button>
+
+                    {/* Tor Network */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRoutingMode('tor');
+                        setUseTor(true);
+                      }}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        routingMode === 'tor'
+                          ? 'border-purple-500 bg-purple-500/10 text-white shadow-sm ring-1 ring-purple-500/30'
+                          : 'border-dark-700 bg-dark-800/60 text-slate-300 hover:border-dark-600'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 text-xs font-semibold">
+                          <Shield className="h-3.5 w-3.5 text-purple-400" />
+                          <span>Tor Network</span>
+                        </div>
+                        {networkStatus?.tor.available && (
+                          <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-sm shadow-emerald-400/50" />
+                        )}
+                      </div>
+                      <p className="text-[10px] text-slate-400 mt-1 leading-snug">
+                        3-hop onion encryption. Maximum IP anonymity & bypass.
+                      </p>
+                    </button>
+                  </div>
+
+                  {/* Active routing status display */}
+                  <div className="p-2.5 rounded-xl bg-dark-800/80 border border-dark-700 text-xs flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-slate-400">Current Routing:</span>
+                      <span className="font-mono text-[11px] text-slate-200">
+                        {routingMode === 'direct' && '⚡ Direct Connection (Fastest)'}
+                        {routingMode === 'warp' && `🛡️ Cloudflare WARP (${networkStatus?.warp.proxy || 'socks5://warp:1080'})`}
+                        {routingMode === 'tor' && `🧅 Tor Network (${networkStatus?.tor.proxy || 'socks5://tor:9050'})`}
                       </span>
                     </div>
                     <button
                       type="button"
-                      onClick={checkTorStatus}
+                      onClick={checkNetwork}
                       className="text-[10px] text-slate-400 hover:text-slate-200 underline"
                     >
-                      Re-check
+                      {checkingTor ? 'Checking...' : 'Refresh'}
                     </button>
                   </div>
-                  {torStatus && !torStatus.running && torStatus.install_hint && (
-                    <div className="mt-1.5 font-mono text-[10px] text-slate-400 bg-dark-900/60 px-2 py-1 rounded">
-                      {torStatus.install_hint}
-                    </div>
-                  )}
                 </div>
+              ) : (
+                <div className="space-y-3">
+                  <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
+                    <Shield className="h-3.5 w-3.5 text-purple-400" />
+                    Route Through Tor
+                  </label>
 
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <div
-                    onClick={() => setUseTor(!useTor)}
-                    className={`relative w-10 h-5 rounded-full transition-colors cursor-pointer ${
-                      useTor ? 'bg-purple-600' : 'bg-dark-600'
-                    }`}
-                  >
-                    <div className={`absolute top-0.5 h-4 w-4 bg-white rounded-full shadow transition-all ${
-                      useTor ? 'left-5' : 'left-0.5'
-                    }`} />
+                  {/* Tor Status Badge */}
+                  <div className={`border rounded-xl p-2.5 text-xs ${torBg}`}>
+                    <div className={`flex items-center justify-between ${torColor}`}>
+                      <div className="flex items-center gap-1.5">
+                        {checkingTor ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : torStatus?.running ? (
+                          <Wifi className="h-3.5 w-3.5" />
+                        ) : (
+                          <WifiOff className="h-3.5 w-3.5" />
+                        )}
+                        <span className="font-mono text-[11px]">
+                          {checkingTor ? 'Checking Tor...'
+                            : torStatus?.running
+                              ? torStatus.is_tor
+                                ? `✅ ${torStatus.source || 'Tor'} Active (Exit IP: ${torStatus.exit_ip})`
+                                : `✅ ${torStatus.source || 'Tor'} Ready (${torStatus.proxy})`
+                              : '❌ Tor not detected'}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={checkNetwork}
+                        className="text-[10px] text-slate-400 hover:text-slate-200 underline"
+                      >
+                        Re-check
+                      </button>
+                    </div>
+                    {torStatus && !torStatus.running && torStatus.install_hint && (
+                      <div className="mt-1.5 font-mono text-[10px] text-slate-400 bg-dark-900/60 px-2 py-1 rounded">
+                        {torStatus.install_hint}
+                      </div>
+                    )}
                   </div>
-                  <span className="text-xs text-slate-300">
-                    {useTor ? `On — routing via ${torStatus?.proxy || 'socks5://127.0.0.1:9150'}` : 'Off'}
-                  </span>
-                </label>
-              </div>
+
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <div
+                      onClick={() => {
+                        const nextTor = !useTor;
+                        setUseTor(nextTor);
+                        setRoutingMode(nextTor ? 'tor' : 'direct');
+                      }}
+                      className={`relative w-10 h-5 rounded-full transition-colors cursor-pointer ${
+                        useTor ? 'bg-purple-600' : 'bg-dark-600'
+                      }`}
+                    >
+                      <div className={`absolute top-0.5 h-4 w-4 bg-white rounded-full shadow transition-all ${
+                        useTor ? 'left-5' : 'left-0.5'
+                      }`} />
+                    </div>
+                    <span className="text-xs text-slate-300">
+                      {useTor ? `On — routing via ${torStatus?.proxy || 'socks5://127.0.0.1:9150'}` : 'Off'}
+                    </span>
+                  </label>
+
+                  {/* Informative Docker mode note */}
+                  <div className="p-2 bg-blue-500/5 border border-blue-500/20 rounded-xl text-[10px] text-blue-300/80 leading-relaxed">
+                    💡 <strong>Docker Mode Bonus:</strong> Cloudflare WARP and Tor multi-proxy routing are both pre-configured side-by-side in Docker Compose (`docker compose up`).
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

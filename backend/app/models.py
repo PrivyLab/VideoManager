@@ -13,8 +13,9 @@ class DownloadRequest(BaseModel):
     # Anti-blocking options
     cookies_from_browser: Optional[str] = None  # "chrome", "firefox", "safari", "edge"
     referer: Optional[str] = None               # Source page URL where video was embedded
-    use_tor: Optional[bool] = False             # Route through Tor SOCKS5 proxy
+    use_tor: Optional[bool] = False             # Route through Tor SOCKS5 proxy (legacy alias)
     custom_proxy: Optional[str] = None          # Any custom proxy: http://, https://, socks5://
+    routing_mode: Optional[str] = "direct"      # "direct", "warp", "tor"
 
 class InspectRequest(BaseModel):
     url: str
@@ -72,3 +73,16 @@ class StitchRequest(BaseModel):
     video_ids: List[str]
     title: Optional[str] = None
     mode: Optional[str] = "auto"  # "auto", "fast", "reencode"
+
+class ProxyEndpointStatus(BaseModel):
+    available: bool
+    proxy: str
+    source: str
+    is_active: bool
+    exit_ip: Optional[str] = None
+    message: str
+
+class NetworkStatusResponse(BaseModel):
+    in_docker: bool
+    warp: ProxyEndpointStatus
+    tor: ProxyEndpointStatus

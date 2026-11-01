@@ -18,6 +18,11 @@ for folder in [STORAGE_DIR, DEFAULT_VIDEOS_DIR, THUMBNAILS_DIR, CHUNKS_DIR]:
 SETTINGS_FILE = STORAGE_DIR / "settings.json"
 
 TOR_PROXY_ENV = os.environ.get("TOR_PROXY")
+WARP_PROXY_ENV = os.environ.get("WARP_PROXY")
+RUNNING_IN_DOCKER = (
+    os.environ.get("RUNNING_IN_DOCKER", "false").lower() in ("true", "1", "yes")
+    or Path("/.dockerenv").exists()
+)
 
 def get_active_tor_proxy() -> Optional[str]:
     """
@@ -35,6 +40,30 @@ def get_active_tor_proxy() -> Optional[str]:
         ("127.0.0.1", 9150),  # Tor Browser Mac App
         ("127.0.0.1", 9050),  # Tor daemon / local Docker container
         ("tor", 9050),        # Docker Compose service
+    ]
+    for host, port in candidates:
+        try:
+            s = socket.create_connection((host, port), timeout=0.5)
+            s.close()
+            return f"socks5://{host}:{port}"
+        except Exception:
+            pass
+    return None
+
+def get_active_warp_proxy() -> Optional[str]:
+    """
+    Auto-detect Cloudflare WARP SOCKS5 proxy:
+    1. WARP_PROXY environment variable (e.g. docker-compose socks5://warp:1080)
+    2. warp:1080 (Docker network)
+    3. 127.0.0.1:1080 (Host mapped container or local warp client)
+    """
+    import socket
+    if WARP_PROXY_ENV and WARP_PROXY_ENV.strip():
+        return WARP_PROXY_ENV.strip()
+
+    candidates = [
+        ("warp", 1080),       # Docker Compose service
+        ("127.0.0.1", 1080),  # Local port mapping
     ]
     for host, port in candidates:
         try:

@@ -3,7 +3,7 @@ import asyncio
 import yt_dlp
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable
-from app.config import DEFAULT_VIDEOS_DIR, get_configured_download_dir, get_active_tor_proxy
+from app.config import DEFAULT_VIDEOS_DIR, get_configured_download_dir, get_active_tor_proxy, get_active_warp_proxy
 
 class YtDlpDownloader:
     """Wrapper around yt-dlp Python API with real-time async callbacks."""
@@ -16,10 +16,17 @@ class YtDlpDownloader:
         self._cancel_requested = True
 
     @staticmethod
-    def build_proxy_string(use_tor: bool = False, custom_proxy: Optional[str] = None) -> Optional[str]:
+    def build_proxy_string(
+        use_tor: bool = False,
+        custom_proxy: Optional[str] = None,
+        routing_mode: Optional[str] = None
+    ) -> Optional[str]:
         if custom_proxy and custom_proxy.strip():
             return custom_proxy.strip()
-        if use_tor:
+        if routing_mode == "warp":
+            active_warp = get_active_warp_proxy()
+            return active_warp or "socks5://127.0.0.1:1080"
+        if routing_mode == "tor" or use_tor:
             active = get_active_tor_proxy()
             return active or "socks5://127.0.0.1:9150"
         return None
@@ -30,6 +37,7 @@ class YtDlpDownloader:
         referer: Optional[str] = None,
         use_tor: bool = False,
         custom_proxy: Optional[str] = None,
+        routing_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Extract metadata without downloading."""
         headers: Dict[str, str] = {
@@ -54,7 +62,7 @@ class YtDlpDownloader:
             'http_headers': headers,
         }
 
-        proxy = YtDlpDownloader.build_proxy_string(use_tor, custom_proxy)
+        proxy = YtDlpDownloader.build_proxy_string(use_tor, custom_proxy, routing_mode)
         if proxy:
             ydl_opts['proxy'] = proxy
 
@@ -94,6 +102,7 @@ class YtDlpDownloader:
         use_tor: bool = False,
         custom_proxy: Optional[str] = None,
         cookies_from_browser: Optional[str] = None,
+        routing_mode: Optional[str] = None,
         progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Dict[str, Any]:
         loop = asyncio.get_running_loop()
@@ -177,8 +186,8 @@ class YtDlpDownloader:
             'http_headers': headers,
         }
 
-        # Proxy (Tor or custom)
-        proxy = self.build_proxy_string(use_tor, custom_proxy)
+        # Proxy (Tor, Cloudflare WARP, or custom)
+        proxy = self.build_proxy_string(use_tor, custom_proxy, routing_mode)
         if proxy:
             ydl_opts['proxy'] = proxy
 
