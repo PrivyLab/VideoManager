@@ -64,6 +64,47 @@ export interface DownloadRequestPayload {
   trim_end?: string;
 }
 
+export interface BatchDownloadItem {
+  url: string;
+  custom_title?: string;
+  trim_start?: string;
+  trim_end?: string;
+}
+
+export interface BatchDownloadPayload {
+  items?: BatchDownloadItem[];
+  urls?: string[];
+  quality?: string;
+  downloader_type?: string;
+  custom_chunks?: number;
+  download_folder?: string;
+  cookies_from_browser?: string;
+  referer?: string;
+  routing_mode?: 'direct' | 'warp' | 'tor';
+  custom_proxy?: string;
+  use_tor?: boolean;
+}
+
+export interface PlaylistItem {
+  index: number;
+  id: string;
+  title: string;
+  url: string;
+  duration: number;
+  thumbnail?: string;
+  uploader?: string;
+}
+
+export interface PlaylistInspectResponse {
+  is_playlist: boolean;
+  title: string;
+  id: string;
+  uploader?: string;
+  description?: string;
+  total_count: number;
+  items: PlaylistItem[];
+}
+
 export interface ProxyEndpointStatus {
   available: boolean;
   proxy: string;

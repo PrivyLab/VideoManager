@@ -12,6 +12,8 @@ import {
   CompressVideoPayload,
   CreateGifPayload,
   TrimVideoPayload,
+  BatchDownloadPayload,
+  PlaylistInspectResponse,
 } from './types';
 
 const API_BASE = '/api';
@@ -42,6 +44,35 @@ export async function startDownload(payload: DownloadRequestPayload): Promise<{ 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || 'Failed to start download');
+  }
+  return res.json();
+}
+
+export async function startBatchDownload(payload: BatchDownloadPayload): Promise<{ success: boolean; count: number; video_ids: string[] }> {
+  const res = await fetch(`${API_BASE}/downloads/batch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to queue batch download');
+  }
+  return res.json();
+}
+
+export async function inspectPlaylist(
+  url: string,
+  options?: { referer?: string; routing_mode?: string; cookies_from_browser?: string; custom_proxy?: string; max_entries?: number }
+): Promise<PlaylistInspectResponse> {
+  const res = await fetch(`${API_BASE}/downloads/playlist/inspect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, ...options }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to inspect playlist');
   }
   return res.json();
 }

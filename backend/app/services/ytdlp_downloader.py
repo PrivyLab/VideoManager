@@ -113,6 +113,91 @@ class YtDlpDownloader:
                 "formats": formats,
             }
 
+    @staticmethod
+    def extract_playlist(
+        url: str,
+        referer: Optional[str] = None,
+        use_tor: bool = False,
+        custom_proxy: Optional[str] = None,
+        routing_mode: Optional[str] = None,
+        cookies_from_browser: Optional[str] = None,
+        max_entries: int = 100
+    ) -> Dict[str, Any]:
+        """Extract playlist or channel metadata and entries without downloading."""
+        headers: Dict[str, str] = {
+            'User-Agent': (
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/120.0.0.0 Safari/537.36'
+            ),
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+        }
+        if referer:
+            headers['Referer'] = referer
+            headers['Origin'] = '/'.join(referer.split('/')[:3])
+
+        ydl_opts: Dict[str, Any] = {
+            'extract_flat': 'in_playlist',
+            'skip_download': True,
+            'noplaylist': False,
+            'quiet': True,
+            'no_warnings': True,
+            'playlist_items': f"1-{max_entries}",
+            'http_headers': headers,
+        }
+
+        proxy = YtDlpDownloader.build_proxy_string(use_tor, custom_proxy, routing_mode)
+        if proxy:
+            ydl_opts['proxy'] = proxy
+
+        if cookies_from_browser and cookies_from_browser.strip():
+            browser = cookies_from_browser.strip().lower()
+            ydl_opts['cookiesfrombrowser'] = (browser,)
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if not info:
+                raise ValueError("Could not extract playlist information.")
+
+            is_playlist = info.get('_type') == 'playlist' or 'entries' in info
+            raw_entries = info.get('entries') if is_playlist else [info]
+            if raw_entries is None:
+                raw_entries = [info]
+
+            items = []
+            for idx, entry in enumerate(raw_entries):
+                if not entry:
+                    continue
+                entry_id = entry.get('id')
+                entry_url = entry.get('url') or entry.get('webpage_url')
+                if not entry_url and entry_id:
+                    entry_url = f"https://www.youtube.com/watch?v={entry_id}"
+
+                thumb = entry.get('thumbnail')
+                if not thumb and entry.get('thumbnails'):
+                    thumb = entry.get('thumbnails')[-1].get('url')
+
+                items.append({
+                    "index": idx + 1,
+                    "id": entry_id or f"item_{idx + 1}",
+                    "title": entry.get('title') or f"Video {idx + 1}",
+                    "url": entry_url or url,
+                    "duration": entry.get('duration') or 0,
+                    "thumbnail": thumb or "",
+                    "uploader": entry.get('uploader') or info.get('uploader') or "",
+                })
+
+            return {
+                "is_playlist": is_playlist,
+                "title": info.get('title') or "Playlist",
+                "id": info.get('id') or "",
+                "uploader": info.get('uploader') or "",
+                "description": (info.get('description') or "")[:300],
+                "total_count": len(items),
+                "items": items
+            }
+
     async def download(
         self,
         url: str,

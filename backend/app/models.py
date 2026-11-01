@@ -26,6 +26,54 @@ class InspectRequest(BaseModel):
     referer: Optional[str] = None
     use_tor: Optional[bool] = False
     custom_proxy: Optional[str] = None
+    routing_mode: Optional[str] = "direct"
+    cookies_from_browser: Optional[str] = None
+
+class BatchDownloadItem(BaseModel):
+    url: str
+    custom_title: Optional[str] = None
+    trim_start: Optional[str] = None
+    trim_end: Optional[str] = None
+
+class BatchDownloadRequest(BaseModel):
+    items: Optional[List[BatchDownloadItem]] = None
+    urls: Optional[List[str]] = None
+    quality: Optional[str] = "best"
+    downloader_type: Optional[str] = "auto"
+    custom_chunks: Optional[int] = 4
+    download_folder: Optional[str] = None
+    cookies_from_browser: Optional[str] = None
+    referer: Optional[str] = None
+    routing_mode: Optional[str] = "direct"
+    custom_proxy: Optional[str] = None
+    use_tor: Optional[bool] = False
+
+class PlaylistInspectRequest(BaseModel):
+    url: str
+    referer: Optional[str] = None
+    use_tor: Optional[bool] = False
+    custom_proxy: Optional[str] = None
+    routing_mode: Optional[str] = "direct"
+    cookies_from_browser: Optional[str] = None
+    max_entries: Optional[int] = 100
+
+class PlaylistItem(BaseModel):
+    index: int
+    id: str
+    title: str
+    url: str
+    duration: Optional[float] = 0
+    thumbnail: Optional[str] = ""
+    uploader: Optional[str] = ""
+
+class PlaylistInspectResponse(BaseModel):
+    is_playlist: bool
+    title: str
+    id: Optional[str] = ""
+    uploader: Optional[str] = ""
+    description: Optional[str] = ""
+    total_count: int
+    items: List[PlaylistItem]
 
 class VideoResponse(BaseModel):
     id: str

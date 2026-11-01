@@ -18,6 +18,12 @@ class DownloadManager:
         self.active_tasks: Dict[str, asyncio.Task] = {}
         self.active_downloaders: Dict[str, Any] = {}
         self.websockets: Set[WebSocket] = set()
+        self._concurrency_semaphore: Optional[asyncio.Semaphore] = None
+
+    def get_semaphore(self) -> asyncio.Semaphore:
+        if self._concurrency_semaphore is None:
+            self._concurrency_semaphore = asyncio.Semaphore(2)
+        return self._concurrency_semaphore
 
     async def register_ws(self, ws: WebSocket):
         self.websockets.add(ws)
@@ -97,176 +103,183 @@ class DownloadManager:
     async def _run_download_task(self, video_id: str, req: DownloadRequest):
         main_loop = asyncio.get_running_loop()
 
-        db_update_video(video_id, {"status": "downloading"})
-        await self.broadcast({
-            "event": "progress",
-            "video_id": video_id,
-            "status": "downloading",
-            "progress": 0.0
-        })
+        async with self.get_semaphore():
+            current_video = db_get_video(video_id)
+            if not current_video or current_video.get("status") == "cancelled":
+                self.active_tasks.pop(video_id, None)
+                self.active_downloaders.pop(video_id, None)
+                return
 
-        def progress_cb(info: Dict[str, Any]):
-            status = info.get("status", "downloading")
-            progress = info.get("progress", 0.0)
-            speed = info.get("speed", "")
-            eta = info.get("eta", "")
-            msg = info.get("message", "")
-            chunks_total = info.get("chunks_total", 0)
-            chunks_completed = info.get("chunks_completed", 0)
-
-            db_update_video(video_id, {
-                "status": status,
-                "progress": progress,
-                "speed": speed,
-                "eta": eta,
-                "chunks_total": chunks_total,
-                "chunks_completed": chunks_completed
-            })
-
-            # Safely schedule the broadcast on the main event loop from thread
-            coro = self.broadcast({
+            db_update_video(video_id, {"status": "downloading"})
+            await self.broadcast({
                 "event": "progress",
                 "video_id": video_id,
-                "status": status,
-                "progress": progress,
-                "speed": speed,
-                "eta": eta,
-                "message": msg,
-                "chunks_total": chunks_total,
-                "chunks_completed": chunks_completed
+                "status": "downloading",
+                "progress": 0.0
             })
-            asyncio.run_coroutine_threadsafe(coro, main_loop)
 
-        try:
-            target_folder = None
-            if req.download_folder and req.download_folder.strip():
-                target_folder = Path(req.download_folder.strip()).expanduser().resolve()
-            else:
-                target_folder = get_configured_download_dir()
-            target_folder.mkdir(parents=True, exist_ok=True)
+            def progress_cb(info: Dict[str, Any]):
+                status = info.get("status", "downloading")
+                progress = info.get("progress", 0.0)
+                speed = info.get("speed", "")
+                eta = info.get("eta", "")
+                msg = info.get("message", "")
+                chunks_total = info.get("chunks_total", 0)
+                chunks_completed = info.get("chunks_completed", 0)
 
-            use_chunk_engine = False
-            if req.downloader_type == "chunked" or (req.chunk_urls and len(req.chunk_urls) > 0):
-                use_chunk_engine = True
-            elif req.downloader_type == "auto":
-                if any(req.url.lower().split("?")[0].endswith(ext) for ext in [".mp4", ".mkv", ".webm", ".mov", ".ts"]):
-                    use_chunk_engine = True
+                db_update_video(video_id, {
+                    "status": status,
+                    "progress": progress,
+                    "speed": speed,
+                    "eta": eta,
+                    "chunks_total": chunks_total,
+                    "chunks_completed": chunks_completed
+                })
 
-            if use_chunk_engine:
-                engine = ChunkEngine(video_id)
-                self.active_downloaders[video_id] = engine
+                # Safely schedule the broadcast on the main event loop from thread
+                coro = self.broadcast({
+                    "event": "progress",
+                    "video_id": video_id,
+                    "status": status,
+                    "progress": progress,
+                    "speed": speed,
+                    "eta": eta,
+                    "message": msg,
+                    "chunks_total": chunks_total,
+                    "chunks_completed": chunks_completed
+                })
+                asyncio.run_coroutine_threadsafe(coro, main_loop)
 
-                filename = f"{video_id}_video.mp4"
-                if req.chunk_urls:
-                    final_path = await engine.download_segment_list(
-                        req.chunk_urls,
-                        output_filename=filename,
-                        output_dir=target_folder,
-                        progress_callback=progress_cb
-                    )
+            try:
+                target_folder = None
+                if req.download_folder and req.download_folder.strip():
+                    target_folder = Path(req.download_folder.strip()).expanduser().resolve()
                 else:
-                    final_path = await engine.download_with_chunking(
-                        req.url,
-                        output_filename=filename,
-                        num_chunks=req.custom_chunks or 4,
+                    target_folder = get_configured_download_dir()
+                target_folder.mkdir(parents=True, exist_ok=True)
+
+                use_chunk_engine = False
+                if req.downloader_type == "chunked" or (req.chunk_urls and len(req.chunk_urls) > 0):
+                    use_chunk_engine = True
+                elif req.downloader_type == "auto":
+                    if any(req.url.lower().split("?")[0].endswith(ext) for ext in [".mp4", ".mkv", ".webm", ".mov", ".ts"]):
+                        use_chunk_engine = True
+
+                if use_chunk_engine:
+                    engine = ChunkEngine(video_id)
+                    self.active_downloaders[video_id] = engine
+
+                    filename = f"{video_id}_video.mp4"
+                    if req.chunk_urls:
+                        final_path = await engine.download_segment_list(
+                            req.chunk_urls,
+                            output_filename=filename,
+                            output_dir=target_folder,
+                            progress_callback=progress_cb
+                        )
+                    else:
+                        final_path = await engine.download_with_chunking(
+                            req.url,
+                            output_filename=filename,
+                            num_chunks=req.custom_chunks or 4,
+                            output_dir=target_folder,
+                            progress_callback=progress_cb
+                        )
+
+                    file_size = final_path.stat().st_size if final_path.exists() else 0
+                    now = datetime.utcnow().isoformat()
+                    updates = {
+                        "title": req.custom_title or final_path.name,
+                        "file_path": str(final_path),
+                        "file_size": file_size,
+                        "file_format": final_path.suffix.replace(".", ""),
+                        "status": "completed",
+                        "progress": 100.0,
+                        "speed": "",
+                        "eta": "",
+                        "downloader_type": "chunked",
+                        "completed_at": now
+                    }
+                    cleanup_video_artifacts(video_id, file_path=str(final_path), keep_final=True)
+                    db_update_video(video_id, updates)
+                    await self.broadcast({
+                        "event": "completed",
+                        "video_id": video_id,
+                        "video": db_get_video(video_id)
+                    })
+
+                else:
+                    downloader = YtDlpDownloader(video_id)
+                    self.active_downloaders[video_id] = downloader
+
+                    res = await downloader.download(
+                        url=req.url,
+                        quality=req.quality or "best",
                         output_dir=target_folder,
-                        progress_callback=progress_cb
+                        referer=req.referer,
+                        use_tor=req.use_tor or False,
+                        custom_proxy=req.custom_proxy,
+                        cookies_from_browser=req.cookies_from_browser,
+                        routing_mode=req.routing_mode,
+                        trim_start=req.trim_start,
+                        trim_end=req.trim_end,
+                        progress_callback=progress_cb,
                     )
 
-                file_size = final_path.stat().st_size if final_path.exists() else 0
-                now = datetime.utcnow().isoformat()
-                updates = {
-                    "title": req.custom_title or final_path.name,
-                    "file_path": str(final_path),
-                    "file_size": file_size,
-                    "file_format": final_path.suffix.replace(".", ""),
-                    "status": "completed",
-                    "progress": 100.0,
-                    "speed": "",
-                    "eta": "",
-                    "downloader_type": "chunked",
-                    "completed_at": now
-                }
-                cleanup_video_artifacts(video_id, file_path=str(final_path), keep_final=True)
-                db_update_video(video_id, updates)
+                    file_path = res.get("file_path")
+                    file_size = 0
+                    file_format = "mp4"
+                    if file_path and Path(file_path).exists():
+                        p = Path(file_path)
+                        file_size = p.stat().st_size
+                        file_format = p.suffix.replace(".", "")
+
+                    now = datetime.utcnow().isoformat()
+                    updates = {
+                        "title": res.get("title") or req.custom_title or "Downloaded Video",
+                        "duration": res.get("duration", 0),
+                        "file_path": file_path or "",
+                        "file_size": file_size,
+                        "file_format": file_format,
+                        "thumbnail_url": res.get("thumbnail") or "",
+                        "resolution": res.get("resolution") or "",
+                        "status": "completed",
+                        "progress": 100.0,
+                        "speed": "",
+                        "eta": "",
+                        "downloader_type": "ytdlp",
+                        "completed_at": now
+                    }
+                    cleanup_video_artifacts(video_id, file_path=file_path, keep_final=True)
+                    db_update_video(video_id, updates)
+                    await self.broadcast({
+                        "event": "completed",
+                        "video_id": video_id,
+                        "video": db_get_video(video_id)
+                    })
+
+            except asyncio.CancelledError:
+                cleanup_video_artifacts(video_id, keep_final=False)
+                db_update_video(video_id, {"status": "cancelled", "error_message": "Cancelled"})
                 await self.broadcast({
-                    "event": "completed",
+                    "event": "progress",
                     "video_id": video_id,
-                    "video": db_get_video(video_id)
+                    "status": "cancelled",
+                    "message": "Download was cancelled."
                 })
-
-            else:
-                downloader = YtDlpDownloader(video_id)
-                self.active_downloaders[video_id] = downloader
-
-                res = await downloader.download(
-                    url=req.url,
-                    quality=req.quality or "best",
-                    output_dir=target_folder,
-                    referer=req.referer,
-                    use_tor=req.use_tor or False,
-                    custom_proxy=req.custom_proxy,
-                    cookies_from_browser=req.cookies_from_browser,
-                    routing_mode=req.routing_mode,
-                    trim_start=req.trim_start,
-                    trim_end=req.trim_end,
-                    progress_callback=progress_cb,
-                )
-
-                file_path = res.get("file_path")
-                file_size = 0
-                file_format = "mp4"
-                if file_path and Path(file_path).exists():
-                    p = Path(file_path)
-                    file_size = p.stat().st_size
-                    file_format = p.suffix.replace(".", "")
-
-                now = datetime.utcnow().isoformat()
-                updates = {
-                    "title": res.get("title") or req.custom_title or "Downloaded Video",
-                    "duration": res.get("duration", 0),
-                    "file_path": file_path or "",
-                    "file_size": file_size,
-                    "file_format": file_format,
-                    "thumbnail_url": res.get("thumbnail") or "",
-                    "resolution": res.get("resolution") or "",
-                    "status": "completed",
-                    "progress": 100.0,
-                    "speed": "",
-                    "eta": "",
-                    "downloader_type": "ytdlp",
-                    "completed_at": now
-                }
-                cleanup_video_artifacts(video_id, file_path=file_path, keep_final=True)
-                db_update_video(video_id, updates)
+            except Exception as e:
+                cleanup_video_artifacts(video_id, keep_final=False)
+                err = str(e)
+                db_update_video(video_id, {"status": "failed", "error_message": err})
                 await self.broadcast({
-                    "event": "completed",
+                    "event": "failed",
                     "video_id": video_id,
-                    "video": db_get_video(video_id)
+                    "status": "failed",
+                    "error": err
                 })
-
-        except asyncio.CancelledError:
-            cleanup_video_artifacts(video_id, keep_final=False)
-            db_update_video(video_id, {"status": "cancelled", "error_message": "Cancelled"})
-            await self.broadcast({
-                "event": "progress",
-                "video_id": video_id,
-                "status": "cancelled",
-                "message": "Download was cancelled."
-            })
-        except Exception as e:
-            cleanup_video_artifacts(video_id, keep_final=False)
-            err = str(e)
-            db_update_video(video_id, {"status": "failed", "error_message": err})
-            await self.broadcast({
-                "event": "failed",
-                "video_id": video_id,
-                "status": "failed",
-                "error": err
-            })
-        finally:
-            self.active_tasks.pop(video_id, None)
-            self.active_downloaders.pop(video_id, None)
+            finally:
+                self.active_tasks.pop(video_id, None)
+                self.active_downloaders.pop(video_id, None)
 
     async def start_stitch(self, video_ids: list, title: Optional[str] = None, mode: str = "auto") -> str:
         job_id = str(uuid.uuid4())[:8]

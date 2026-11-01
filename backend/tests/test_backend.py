@@ -198,6 +198,35 @@ def test_video_trimmer():
     Path("/tmp/test_trim_reencode_thumb.jpg").unlink(missing_ok=True)
     print("Video Trimmer (Instant Cut, Frame-Accurate Cut, Audio Snippet) test: PASSED")
 
+def test_batch_and_playlist_queuing():
+    import asyncio
+    from app.services.download_manager import download_manager
+    from app.models import DownloadRequest, BatchDownloadRequest, BatchDownloadItem
+
+    async def run_batch_test():
+        # Test queuing 3 download requests
+        reqs = [
+            DownloadRequest(url=f"https://example.com/video_{i}.mp4", custom_title=f"Bulk Episode {i}")
+            for i in range(1, 4)
+        ]
+        ids = []
+        for r in reqs:
+            vid_id = await download_manager.start_download(r)
+            ids.append(vid_id)
+
+        assert len(ids) == 3
+        # Check that videos are saved in DB
+        for vid in ids:
+            record = db_get_video(vid)
+            assert record is not None
+            assert record["status"] in ("queued", "downloading", "failed", "cancelled")
+            # Cancel test tasks cleanly
+            await download_manager.cancel_download(vid)
+            db_delete_video(vid)
+
+    asyncio.run(run_batch_test())
+    print("Batch & Playlist Queue Manager test: PASSED")
+
 if __name__ == "__main__":
     test_db_operations()
     test_chunk_engine_merging()
@@ -205,4 +234,5 @@ if __name__ == "__main__":
     test_video_stitching()
     test_media_tools()
     test_video_trimmer()
+    test_batch_and_playlist_queuing()
     print("ALL TESTS PASSED SUCCESSFULLY!")

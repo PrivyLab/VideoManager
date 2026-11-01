@@ -1,5 +1,12 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from app.models import DownloadRequest, InspectRequest
+from app.models import (
+    DownloadRequest,
+    InspectRequest,
+    BatchDownloadRequest,
+    BatchDownloadItem,
+    PlaylistInspectRequest,
+    PlaylistInspectResponse
+)
 from app.services.download_manager import download_manager
 from app.services.ytdlp_downloader import YtDlpDownloader
 from app.services.chunk_engine import ChunkEngine
@@ -13,6 +20,68 @@ async def create_download(req: DownloadRequest):
         raise HTTPException(status_code=400, detail="Video URL is required")
     video_id = await download_manager.start_download(req)
     return {"success": True, "video_id": video_id}
+
+@router.post("/batch")
+async def create_batch_downloads(req: BatchDownloadRequest):
+    """Queues a batch of video URLs for sequential / concurrent downloading."""
+    items_to_download = []
+    if req.items and len(req.items) > 0:
+        items_to_download = req.items
+    elif req.urls and len(req.urls) > 0:
+        for u in req.urls:
+            u_clean = u.strip()
+            if u_clean:
+                items_to_download.append(BatchDownloadItem(url=u_clean))
+
+    if not items_to_download:
+        raise HTTPException(status_code=400, detail="At least one valid URL is required for batch download.")
+
+    video_ids = []
+    for item in items_to_download:
+        dl_req = DownloadRequest(
+            url=item.url,
+            quality=req.quality or "best",
+            downloader_type=req.downloader_type or "auto",
+            custom_chunks=req.custom_chunks or 4,
+            custom_title=item.custom_title,
+            download_folder=req.download_folder,
+            cookies_from_browser=req.cookies_from_browser,
+            referer=req.referer,
+            use_tor=req.use_tor or False,
+            custom_proxy=req.custom_proxy,
+            routing_mode=req.routing_mode or "direct",
+            trim_start=item.trim_start,
+            trim_end=item.trim_end
+        )
+        vid_id = await download_manager.start_download(dl_req)
+        video_ids.append(vid_id)
+
+    return {
+        "success": True,
+        "count": len(video_ids),
+        "video_ids": video_ids
+    }
+
+@router.post("/playlist/inspect")
+async def inspect_playlist(req: PlaylistInspectRequest):
+    """Inspects a playlist or channel to list all episodes/videos with checkboxes without downloading."""
+    url = req.url.strip() if req.url else ""
+    if not url:
+        raise HTTPException(status_code=400, detail="Playlist URL is required.")
+
+    try:
+        data = YtDlpDownloader.extract_playlist(
+            url=url,
+            referer=req.referer,
+            use_tor=req.use_tor or False,
+            custom_proxy=req.custom_proxy,
+            routing_mode=req.routing_mode,
+            cookies_from_browser=req.cookies_from_browser,
+            max_entries=req.max_entries or 100
+        )
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Playlist extraction failed: {str(e)}")
 
 @router.post("/inspect")
 async def inspect_url(req: InspectRequest):
