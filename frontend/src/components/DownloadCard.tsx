@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import {
   Download, Search, Settings2, Sparkles, CheckCircle2, AlertCircle,
   Layers, Split, Folder, Shield, Globe, Cookie, Wifi, WifiOff, Loader2,
-  ExternalLink, Zap, Scissors, ListFilter, ListOrdered, Film, ListPlus
+  ExternalLink, Zap, Scissors, ListFilter, ListOrdered, Film, ListPlus,
+  Bookmark
 } from 'lucide-react';
 import {
   inspectUrl,
@@ -22,14 +23,20 @@ import {
 
 interface DownloadCardProps {
   currentFolder?: string;
+  initialUrl?: string;
+  autoStart?: boolean;
   onDownloadStarted: () => void;
   onOpenFolderPicker: () => void;
+  onOpenBookmarklet?: () => void;
 }
 
 export const DownloadCard: React.FC<DownloadCardProps> = ({
   currentFolder,
+  initialUrl,
+  autoStart,
   onDownloadStarted,
   onOpenFolderPicker,
+  onOpenBookmarklet,
 }) => {
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
@@ -105,6 +112,30 @@ export const DownloadCard: React.FC<DownloadCardProps> = ({
       checkNetwork();
     }
   }, [showAntiBlock]);
+
+  // Auto-fill and start from incoming bookmarklet or URL query parameters
+  useEffect(() => {
+    if (initialUrl && initialUrl.trim()) {
+      setUrl(initialUrl.trim());
+      if (autoStart) {
+        const timer = setTimeout(() => {
+          startDownload({
+            url: initialUrl.trim(),
+            quality,
+            download_folder: currentFolder || undefined,
+          })
+            .then(() => {
+              setUrl('');
+              onDownloadStarted();
+            })
+            .catch((err) => {
+              setError(err.message || 'Failed to start download from bookmarklet');
+            });
+        }, 400);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [initialUrl, autoStart, currentFolder, quality, onDownloadStarted]);
 
   // Auto-fill Referer from inspected page
   const handleInspect = async () => {
@@ -381,6 +412,19 @@ export const DownloadCard: React.FC<DownloadCardProps> = ({
             <Settings2 className="h-3.5 w-3.5" />
             <span>Options</span>
           </button>
+
+          {/* Bookmarklet 1-Click button */}
+          {onOpenBookmarklet && (
+            <button
+              type="button"
+              onClick={onOpenBookmarklet}
+              className="text-xs px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition-all bg-dark-700/60 hover:bg-dark-700 text-slate-300 hover:text-white border border-dark-600 shadow-sm"
+              title="Install 1-Click Browser Bookmarklet"
+            >
+              <Bookmark className="h-3.5 w-3.5 text-brand-400" />
+              <span className="hidden sm:inline">1-Click Bookmarklet</span>
+            </button>
+          )}
         </div>
       </div>
 

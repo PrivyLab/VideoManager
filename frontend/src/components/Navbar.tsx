@@ -1,5 +1,5 @@
 import React from 'react';
-import { Film, HardDrive, Layers, Folder } from 'lucide-react';
+import { Film, HardDrive, Layers, Folder, Bookmark } from 'lucide-react';
 import { formatBytes } from '../api';
 import { SystemSettings } from '../types';
 
@@ -11,6 +11,7 @@ interface NavbarProps {
   settings?: SystemSettings | null;
   onOpenExplainer: () => void;
   onOpenFolderPicker: () => void;
+  onOpenBookmarklet: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -21,6 +22,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   settings,
   onOpenExplainer,
   onOpenFolderPicker,
+  onOpenBookmarklet,
 }) => {
   return (
     <header className="border-b border-dark-700 bg-dark-900/80 backdrop-blur-md sticky top-0 z-40">
@@ -43,6 +45,16 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Stats & Actions */}
         <div className="flex items-center space-x-3">
+          {/* Bookmarklet 1-Click button */}
+          <button
+            onClick={onOpenBookmarklet}
+            className="flex items-center space-x-1.5 text-xs text-brand-400 hover:text-white bg-brand-500/10 hover:bg-brand-500/20 border border-brand-500/30 px-3 py-1.5 rounded-lg transition-all shadow-sm"
+            title="Install 1-Click Browser Bookmarklet"
+          >
+            <Bookmark className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline font-medium">1-Click Bookmarklet</span>
+          </button>
+
           {/* Destination Folder button */}
           <button
             onClick={onOpenFolderPicker}

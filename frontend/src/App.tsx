@@ -8,6 +8,7 @@ import { ChunkEngineExplainer } from './components/ChunkEngineExplainer';
 import { FolderPickerModal } from './components/FolderPickerModal';
 import { VideoStitchModal } from './components/VideoStitchModal';
 import { MediaToolsModal } from './components/MediaToolsModal';
+import { BookmarkletModal } from './components/BookmarkletModal';
 import { fetchVideos, getSystemSettings } from './api';
 import { VideoItem, SystemSettings } from './types';
 
@@ -18,9 +19,28 @@ export const App: React.FC = () => {
   const [playingVideo, setPlayingVideo] = useState<VideoItem | null>(null);
   const [showExplainer, setShowExplainer] = useState(false);
   const [showFolderPicker, setShowFolderPicker] = useState(false);
+  const [showBookmarklet, setShowBookmarklet] = useState(false);
+  const [incomingUrl, setIncomingUrl] = useState<string | undefined>(undefined);
+  const [autoStartDownload, setAutoStartDownload] = useState(false);
   const [stitchModalVideos, setStitchModalVideos] = useState<VideoItem[] | null>(null);
   const [mediaToolsTarget, setMediaToolsTarget] = useState<{ video: VideoItem; initialTab: 'audio' | 'compress' | 'gif' | 'trim' } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+
+  // Read URL search params for incoming Bookmarklet downloads
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const urlParam = params.get('url');
+      const autoParam = params.get('autodownload');
+      if (urlParam) {
+        setIncomingUrl(urlParam);
+        if (autoParam === '1' || autoParam === 'true') {
+          setAutoStartDownload(true);
+        }
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    }
+  }, []);
 
   const loadVideos = useCallback(async () => {
     try {
@@ -133,17 +153,21 @@ export const App: React.FC = () => {
         settings={settings}
         onOpenExplainer={() => setShowExplainer(true)}
         onOpenFolderPicker={() => setShowFolderPicker(true)}
+        onOpenBookmarklet={() => setShowBookmarklet(true)}
       />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
         {/* Download Action Card */}
         <DownloadCard
           currentFolder={settings?.download_folder}
+          initialUrl={incomingUrl}
+          autoStart={autoStartDownload}
           onDownloadStarted={() => {
             loadVideos();
             loadSettings();
           }}
           onOpenFolderPicker={() => setShowFolderPicker(true)}
+          onOpenBookmarklet={() => setShowBookmarklet(true)}
         />
 
         {/* Active Realtime Downloads */}
@@ -212,6 +236,11 @@ export const App: React.FC = () => {
             loadSettings();
           }}
         />
+      )}
+
+      {/* Browser Bookmarklet Setup Modal */}
+      {showBookmarklet && (
+        <BookmarkletModal onClose={() => setShowBookmarklet(false)} />
       )}
     </div>
   );
