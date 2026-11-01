@@ -3,9 +3,7 @@ import asyncio
 import yt_dlp
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable
-from app.config import DEFAULT_VIDEOS_DIR, get_configured_download_dir
-
-TOR_PROXY = "socks5://127.0.0.1:9050"
+from app.config import DEFAULT_VIDEOS_DIR, get_configured_download_dir, get_active_tor_proxy
 
 class YtDlpDownloader:
     """Wrapper around yt-dlp Python API with real-time async callbacks."""
@@ -22,7 +20,8 @@ class YtDlpDownloader:
         if custom_proxy and custom_proxy.strip():
             return custom_proxy.strip()
         if use_tor:
-            return TOR_PROXY
+            active = get_active_tor_proxy()
+            return active or "socks5://127.0.0.1:9150"
         return None
 
     @staticmethod

@@ -17,6 +17,34 @@ for folder in [STORAGE_DIR, DEFAULT_VIDEOS_DIR, THUMBNAILS_DIR, CHUNKS_DIR]:
 # Settings file to persist default download directory configured by user
 SETTINGS_FILE = STORAGE_DIR / "settings.json"
 
+TOR_PROXY_ENV = os.environ.get("TOR_PROXY")
+
+def get_active_tor_proxy() -> Optional[str]:
+    """
+    Auto-detect active Tor SOCKS5 proxy:
+    1. TOR_PROXY environment variable (e.g. docker-compose socks5://tor:9050)
+    2. Port 9150 (Tor Browser Mac App - default)
+    3. Port 9050 (Tor daemon or local container)
+    4. tor:9050 (Docker network)
+    """
+    import socket
+    if TOR_PROXY_ENV and TOR_PROXY_ENV.strip():
+        return TOR_PROXY_ENV.strip()
+
+    candidates = [
+        ("127.0.0.1", 9150),  # Tor Browser Mac App
+        ("127.0.0.1", 9050),  # Tor daemon / local Docker container
+        ("tor", 9050),        # Docker Compose service
+    ]
+    for host, port in candidates:
+        try:
+            s = socket.create_connection((host, port), timeout=0.5)
+            s.close()
+            return f"socks5://{host}:{port}"
+        except Exception:
+            pass
+    return None
+
 def get_configured_download_dir() -> Path:
     """Get the currently configured default download directory."""
     if SETTINGS_FILE.exists():

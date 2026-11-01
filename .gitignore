@@ -9,6 +9,7 @@ backend/storage/videos/*
 !backend/storage/videos/.gitkeep
 backend/storage/temp_chunks/*
 backend/storage/*.db
+backend/storage/*.json
 
 # Node & Frontend
 node_modules/

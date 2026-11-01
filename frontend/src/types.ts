@@ -63,6 +63,7 @@ export interface DownloadRequestPayload {
 export interface TorStatus {
   running: boolean;
   proxy: string;
+  source?: string;
   is_tor?: boolean | null;
   exit_ip?: string | null;
   message: string;

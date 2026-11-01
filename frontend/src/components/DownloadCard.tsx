@@ -381,9 +381,9 @@ export const DownloadCard: React.FC<DownloadCardProps> = ({
                         {checkingTor ? 'Checking Tor...'
                           : torStatus?.running
                             ? torStatus.is_tor
-                              ? `✅ Tor Active (Exit IP: ${torStatus.exit_ip})`
-                              : '⚠️ Tor port open but routing unconfirmed'
-                            : '❌ Tor not running'}
+                              ? `✅ ${torStatus.source || 'Tor'} Active (Exit IP: ${torStatus.exit_ip})`
+                              : `✅ ${torStatus.source || 'Tor'} Ready (${torStatus.proxy})`
+                            : '❌ Tor not detected'}
                       </span>
                     </div>
                     <button
@@ -413,7 +413,7 @@ export const DownloadCard: React.FC<DownloadCardProps> = ({
                     }`} />
                   </div>
                   <span className="text-xs text-slate-300">
-                    {useTor ? 'On — routing via socks5://127.0.0.1:9050' : 'Off'}
+                    {useTor ? `On — routing via ${torStatus?.proxy || 'socks5://127.0.0.1:9150'}` : 'Off'}
                   </span>
                 </label>
               </div>

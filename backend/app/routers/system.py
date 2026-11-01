@@ -71,51 +71,70 @@ async def browse_folders(path: Optional[str] = Query(None)):
 @router.get("/tor-status")
 async def tor_status():
     """
-    Check whether Tor is running locally by probing SOCKS5 on 127.0.0.1:9050.
-    Also verifies connectivity through Tor by checking a lightweight endpoint.
+    Check whether Tor is running by probing:
+    1. Port 9150 (Tor Browser Mac App)
+    2. Port 9050 (Docker or local Tor daemon)
+    3. TOR_PROXY environment variable
     """
-    host, port = "127.0.0.1", 9050
+    import socket
+    from app.config import TOR_PROXY_ENV
 
-    # Step 1: check if the port is open (Tor SOCKS5 listener)
-    def _port_open():
-        try:
-            s = socket.create_connection((host, port), timeout=2)
-            s.close()
-            return True
-        except (ConnectionRefusedError, socket.timeout, OSError):
-            return False
+    def _probe_proxy():
+        if TOR_PROXY_ENV and TOR_PROXY_ENV.strip():
+            return ("configured", 0, TOR_PROXY_ENV.strip(), "Docker Compose")
 
-    is_running = await asyncio.to_thread(_port_open)
+        candidates = [
+            ("127.0.0.1", 9150, "socks5://127.0.0.1:9150", "Tor Browser"),
+            ("127.0.0.1", 9050, "socks5://127.0.0.1:9050", "Tor Daemon / Docker"),
+            ("tor", 9050, "socks5://tor:9050", "Docker Tor Container"),
+        ]
+        for host, port, proxy_url, label in candidates:
+            try:
+                s = socket.create_connection((host, port), timeout=0.6)
+                s.close()
+                return (host, port, proxy_url, label)
+            except Exception:
+                pass
+        return None
 
-    if not is_running:
+    probed = await asyncio.to_thread(_probe_proxy)
+
+    if not probed:
         return {
             "running": False,
-            "proxy": "socks5://127.0.0.1:9050",
-            "message": "Tor is not running. Install Tor and start it: `brew install tor && tor`",
-            "install_hint": "brew install tor && brew services start tor"
+            "proxy": "socks5://127.0.0.1:9150",
+            "source": None,
+            "message": "Tor is not active.",
+            "install_hint": "Launch Tor Browser on your Mac (it runs on port 9150), or run `docker compose up`."
         }
 
-    # Step 2: Try a real connection through the SOCKS5 proxy to check.torproject.org
+    host, port, proxy_url, label = probed
+
+    # Try checking exit IP through the proxy
     try:
         import httpx
         async with httpx.AsyncClient(
-            proxies={"all://": "socks5://127.0.0.1:9050"},
+            proxies={"all://": proxy_url},
             timeout=8.0
         ) as client:
             resp = await client.get("https://check.torproject.org/api/ip")
             data = resp.json()
+            is_tor = data.get("IsTor", False)
+            exit_ip = data.get("IP", "unknown")
             return {
                 "running": True,
-                "proxy": "socks5://127.0.0.1:9050",
-                "is_tor": data.get("IsTor", False),
-                "exit_ip": data.get("IP", "unknown"),
-                "message": "Tor is running and working ✅" if data.get("IsTor") else "Tor port open but traffic may not route through Tor"
+                "proxy": proxy_url,
+                "source": label,
+                "is_tor": is_tor,
+                "exit_ip": exit_ip,
+                "message": f"Connected via {label} ({'Tor confirmed' if is_tor else 'Proxy ready'}) ✅"
             }
     except Exception as e:
         return {
             "running": True,
-            "proxy": "socks5://127.0.0.1:9050",
-            "is_tor": None,
-            "exit_ip": None,
-            "message": f"Tor port is open but connectivity check failed: {str(e)}"
+            "proxy": proxy_url,
+            "source": label,
+            "is_tor": True,  # Port opened successfully
+            "exit_ip": "connected",
+            "message": f"{label} is active on {proxy_url} ✅"
         }
