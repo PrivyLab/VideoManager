@@ -1,0 +1,28 @@
+# Git
+.git
+.gitignore
+
+# Python
+**/__pycache__
+**/*.pyc
+**/*.pyo
+backend/venv/
+.env
+
+# Node
+frontend/node_modules/
+frontend/.npm-cache/
+frontend/dist/
+
+# Storage & Temporary
+backend/storage/videos/*
+!backend/storage/videos/.gitkeep
+backend/storage/temp_chunks/*
+backend/storage/*.db
+backend/storage/settings.json
+downloads/
+data/
+
+# OS
+.DS_Store
+

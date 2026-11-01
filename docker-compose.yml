@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  videomanager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: videomanager
+    ports:
+      - "8000:8000"
+    environment:
+      - DOWNLOAD_DIR=/downloads
+    volumes:
+      # Mount host folder so downloaded videos are accessible directly on your host machine
+      - ./downloads:/downloads
+      # Mount storage for SQLite DB and metadata persistence
+      - ./data:/app/storage
+    restart: unless-stopped
+

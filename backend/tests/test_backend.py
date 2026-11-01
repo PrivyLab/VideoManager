@@ -1,0 +1,129 @@
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.database import init_db, db_create_video, db_get_video, db_update_video, db_get_all_videos, db_delete_video
+from app.services.chunk_engine import ChunkEngine
+from app.config import get_configured_download_dir, set_configured_download_dir
+from app.services.video_stitcher import VideoStitcher
+
+def test_db_operations():
+    init_db()
+    test_id = "test_vid_123"
+    db_create_video({
+        "id": test_id,
+        "url": "https://example.com/test.mp4",
+        "title": "Test Video Title",
+        "duration": 120.5,
+        "file_path": "/tmp/test.mp4",
+        "file_size": 1048576,
+        "file_format": "mp4",
+        "thumbnail_url": "https://example.com/thumb.jpg",
+        "resolution": "1920x1080",
+        "status": "completed",
+        "progress": 100.0,
+        "speed": "5.2 MB/s",
+        "eta": "0s",
+        "error_message": "",
+        "downloader_type": "chunked",
+        "chunks_total": 4,
+        "chunks_completed": 4,
+        "created_at": "2026-11-01T20:00:00",
+        "completed_at": "2026-11-01T20:00:10"
+    })
+
+    video = db_get_video(test_id)
+    assert video is not None
+    assert video["title"] == "Test Video Title"
+
+    db_update_video(test_id, {"title": "Updated Title"})
+    video_updated = db_get_video(test_id)
+    assert video_updated["title"] == "Updated Title"
+
+    all_vids = db_get_all_videos()
+    assert any(v["id"] == test_id for v in all_vids)
+
+    db_delete_video(test_id)
+    assert db_get_video(test_id) is None
+    print("Database operations test: PASSED")
+
+def test_chunk_engine_merging():
+    import asyncio
+    engine = ChunkEngine("unit_test")
+    
+    chunk_0 = engine.work_dir / "chunk_0.part"
+    chunk_1 = engine.work_dir / "chunk_1.part"
+    output_file = engine.work_dir / "merged_output.bin"
+
+    with open(chunk_0, "wb") as f:
+        f.write(b"HELLO ")
+    with open(chunk_1, "wb") as f:
+        f.write(b"WORLD!")
+
+    async def run_merge():
+        await engine.merge_chunks([chunk_0, chunk_1], output_file)
+
+    asyncio.run(run_merge())
+
+    assert output_file.exists()
+    with open(output_file, "rb") as f:
+        content = f.read()
+    assert content == b"HELLO WORLD!"
+    engine.cleanup()
+    print("Chunk engine merge test: PASSED")
+
+def test_download_folder_configuration():
+    test_folder = Path("/tmp/videomanager_custom_downloads")
+    set_configured_download_dir(str(test_folder))
+    configured = get_configured_download_dir()
+    assert str(configured) == str(test_folder.resolve())
+    assert test_folder.exists()
+    print("Download folder configuration test: PASSED")
+
+def test_video_stitching():
+    import asyncio
+    import subprocess
+    
+    # Generate 2 minimal test clips using ffmpeg
+    clip1 = Path("/tmp/test_stitch_1.mp4")
+    clip2 = Path("/tmp/test_stitch_2.mp4")
+    out_dir = Path("/tmp/test_stitch_out")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    
+    cmd1 = ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=1:size=320x240:rate=30", "-f", "lavfi", "-i", "sine=frequency=1000:duration=1", "-c:v", "libx264", "-c:a", "aac", "-pix_fmt", "yuv420p", str(clip1)]
+    cmd2 = ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=1:size=320x240:rate=30", "-f", "lavfi", "-i", "sine=frequency=500:duration=1", "-c:v", "libx264", "-c:a", "aac", "-pix_fmt", "yuv420p", str(clip2)]
+    
+    subprocess.run(cmd1, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(cmd2, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    stitcher = VideoStitcher("test_job")
+    
+    async def run_stitch():
+        return await stitcher.stitch(
+            input_paths=[clip1, clip2],
+            output_dir=out_dir,
+            output_filename="merged_test.mp4",
+            mode="auto"
+        )
+        
+    res = asyncio.run(run_stitch())
+    assert Path(res["file_path"]).exists()
+    assert res["file_size"] > 1000
+    assert res["duration"] >= 1.9
+    
+    # Cleanup
+    clip1.unlink(missing_ok=True)
+    clip2.unlink(missing_ok=True)
+    Path(res["file_path"]).unlink(missing_ok=True)
+    thumb = out_dir / "merged_test_thumb.jpg"
+    thumb.unlink(missing_ok=True)
+    print("Video stitching test: PASSED")
+
+if __name__ == "__main__":
+    test_db_operations()
+    test_chunk_engine_merging()
+    test_download_folder_configuration()
+    test_video_stitching()
+    print("ALL TESTS PASSED SUCCESSFULLY!")
