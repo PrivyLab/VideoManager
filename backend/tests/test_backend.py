@@ -435,10 +435,10 @@ def test_single_direct_video_stream():
     import httpx
     from app.services.download_manager import extract_filename_from_url, sanitize_media_filename
 
-    # 1. Test clean filename extraction for URLs like arhivach
-    arhivach_url = "https://i.arhivach.vc/storage/1/60/16055607962ecb14d267630ffb206652.mp4"
-    extracted = extract_filename_from_url(arhivach_url)
-    assert extracted == "16055607962ecb14d267630ffb206652.mp4"
+    # 1. Test clean filename extraction for direct media URLs
+    sample_direct_url = "https://cdn.example.com/storage/1/60/sample_direct_video.mp4"
+    extracted = extract_filename_from_url(sample_direct_url)
+    assert extracted == "sample_direct_video.mp4"
 
     dirty_title = 'My: Cool "Video" <123>?*'
     sanitized = sanitize_media_filename(dirty_title)
@@ -448,7 +448,7 @@ def test_single_direct_video_stream():
     video_bytes = b"\x00\x00\x00 ftypisom" + b"A" * 10240
 
     def mock_handler(request: httpx.Request):
-        # Emulate servers like arhivach or CDNs without range support
+        # Emulate servers or CDNs without range support
         # HEAD returns 405 Method Not Allowed
         if request.method == "HEAD":
             return httpx.Response(405, headers={"Allow": "GET"})
@@ -471,7 +471,7 @@ def test_single_direct_video_stream():
     engine = ChunkEngine(test_id, client=mock_client)
     out_dir = Path("/tmp/test_single_stream_out")
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_file = "16055607962ecb14d267630ffb206652.mp4"
+    out_file = "sample_direct_video.mp4"
 
     progress_events = []
     def on_progress(p):
@@ -479,7 +479,7 @@ def test_single_direct_video_stream():
 
     async def run_direct_download():
         return await engine.download_with_chunking(
-            url=arhivach_url,
+            url=sample_direct_url,
             output_filename=out_file,
             num_chunks=4,
             output_dir=out_dir,
@@ -751,11 +751,11 @@ def test_video_link_finder():
     # 8. Test Direct .mp4 Input URL
     async def run_direct_input_test():
         res = await VideoLinkFinder.find_links(
-            url="https://i.arhivach.vc/storage/1/60/16055607962ecb14d267630ffb206652.mp4",
+            url="https://cdn.example.com/storage/1/60/sample_direct_video.mp4",
             routing_mode="direct"
         )
         assert res["total_found"] >= 1
-        assert res["links"][0]["url"] == "https://i.arhivach.vc/storage/1/60/16055607962ecb14d267630ffb206652.mp4"
+        assert res["links"][0]["url"] == "https://cdn.example.com/storage/1/60/sample_direct_video.mp4"
         assert res["links"][0]["format"] == "MP4"
 
     asyncio.run(run_direct_input_test())

@@ -28,7 +28,7 @@ def _get_secret_key() -> str:
         SECRET_FILE.write_text(new_key)
         return new_key
     except Exception:
-        return "vm_default_secret_key_9283748291048291"
+        return os.environ.get("STREAM_SECRET_KEY") or secrets.token_hex(32)
 
 
 SECRET_KEY = _get_secret_key()

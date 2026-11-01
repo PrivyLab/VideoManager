@@ -8,21 +8,29 @@
 **/*.pyo
 backend/venv/
 .env
+.env.*
+!.env.example
 
 # Node
+node_modules/
 frontend/node_modules/
 frontend/.npm-cache/
 frontend/dist/
 
 # Storage & Temporary
-backend/storage/videos/*
-!backend/storage/videos/.gitkeep
-backend/storage/temp_chunks/*
-backend/storage/*.db
-backend/storage/settings.json
 downloads/
 data/
+storage/
+backend/storage/videos/*
+!backend/storage/videos/.gitkeep
+backend/storage/thumbnails/*
+!backend/storage/thumbnails/.gitkeep
+backend/storage/temp_chunks/*
+backend/storage/*.db
+backend/storage/*.json
+backend/storage/.*
 
 # OS
 .DS_Store
-
+._*
+Thumbs.db

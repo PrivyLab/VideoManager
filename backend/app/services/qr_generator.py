@@ -10,7 +10,12 @@ def get_local_wifi_ip() -> str:
     """
     Auto-detects the host machine's active local Wi-Fi / LAN IP address
     so devices on the same home network can connect.
+    Supports PUBLIC_HOST or HOST_IP environment override if hosted on a public domain/IP.
     """
+    env_override = os.environ.get("PUBLIC_HOST") or os.environ.get("HOST_IP")
+    if env_override and env_override.strip():
+        return env_override.strip()
+
     # 1. Try ifconfig output on macOS / Linux
     try:
         out = subprocess.check_output(["ifconfig"], text=True)
