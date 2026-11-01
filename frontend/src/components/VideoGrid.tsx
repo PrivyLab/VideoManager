@@ -17,10 +17,11 @@ import {
   Scissors,
   Sparkles,
   Minimize2,
-  Smartphone
+  Smartphone,
+  Loader2
 } from 'lucide-react';
 import { VideoItem } from '../types';
-import { formatBytes, formatDuration, deleteVideo, retryDownload } from '../api';
+import { formatBytes, formatDuration, deleteVideo, retryDownload, bulkDeleteVideos } from '../api';
 
 interface VideoGridProps {
   videos: VideoItem[];
@@ -44,6 +45,7 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const completedVideos = videos.filter((v) => v.status === 'completed');
 
@@ -60,11 +62,11 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
     );
   };
 
-  const handleSelectAllCompleted = () => {
-    if (selectedIds.length === completedVideos.length) {
+  const handleSelectAll = () => {
+    if (selectedIds.length === filteredVideos.length && filteredVideos.length > 0) {
       setSelectedIds([]);
     } else {
-      setSelectedIds(completedVideos.map((v) => v.id));
+      setSelectedIds(filteredVideos.map((v) => v.id));
     }
   };
 
@@ -76,63 +78,93 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
     }
   };
 
+  const handleBulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+    const count = selectedIds.length;
+    if (window.confirm(`Are you sure you want to permanently delete ${count} selected video${count > 1 ? 's' : ''} and all stored files from disk?`)) {
+      try {
+        setIsDeleting(true);
+        await bulkDeleteVideos(selectedIds);
+        setNotice(`Successfully deleted ${count} video${count > 1 ? 's' : ''} from library.`);
+        setTimeout(() => setNotice(null), 3500);
+        setSelectedIds([]);
+        setIsSelectionMode(false);
+        onRefresh();
+      } catch (err: any) {
+        setNotice(`Failed to delete videos: ${err.message || 'Unknown error'}`);
+        setTimeout(() => setNotice(null), 4000);
+      } finally {
+        setIsDeleting(false);
+      }
+    }
+  };
+
   const handleRetry = async (id: string) => {
     await retryDownload(id);
     onRefresh();
   };
 
-  const handleLaunchStitch = () => {
-    const selectedItems = selectedIds
-      .map((id) => videos.find((v) => v.id === id))
-      .filter((v): v is VideoItem => Boolean(v && v.status === 'completed'));
+  const selectedCompletedVideos = selectedIds
+    .map((id) => videos.find((v) => v.id === id))
+    .filter((v): v is VideoItem => Boolean(v && v.status === 'completed'));
 
-    if (selectedItems.length >= 2) {
-      onOpenStitchModal(selectedItems);
+  const handleLaunchStitch = () => {
+    if (selectedCompletedVideos.length >= 2) {
+      onOpenStitchModal(selectedCompletedVideos);
     }
   };
 
   return (
     <div className="space-y-4 relative pb-16">
-      {/* Search, Filter & Stitch Action Header */}
+      {/* Search, Filter & Bulk Actions Header */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-        <div className="flex items-center gap-3 self-start sm:self-auto">
+        <div className="flex items-center gap-2.5 self-start sm:self-auto flex-wrap">
           <h3 className="text-base font-semibold text-white flex items-center gap-2">
             <Video className="h-5 w-5 text-brand-400" />
             Video Library ({videos.length})
           </h3>
 
-          {/* Stitch Mode Action Button */}
-          <button
-            onClick={() => {
-              if (completedVideos.length < 2) {
-                setNotice('Download at least 2 videos first to stitch them together.');
-                setTimeout(() => setNotice(null), 4000);
-                return;
-              }
-              setIsSelectionMode(!isSelectionMode);
-              if (isSelectionMode) setSelectedIds([]);
-            }}
-            className={`px-3 py-1.5 text-xs rounded-xl flex items-center gap-1.5 transition-all font-medium border shadow-sm ${
-              isSelectionMode
-                ? 'bg-brand-500/20 text-brand-300 border-brand-500/50 shadow-brand-500/10'
-                : completedVideos.length >= 2
-                ? 'bg-dark-800 text-slate-200 border-dark-700 hover:text-white hover:border-brand-500/40 hover:bg-dark-700'
-                : 'bg-dark-800/60 text-slate-400 border-dark-700/80 hover:text-slate-300'
-            }`}
-            title={
-              completedVideos.length >= 2
-                ? 'Select multiple videos and stitch them together'
-                : 'Download at least 2 videos to use the stitch tool'
-            }
-          >
-            <Layers className="h-3.5 w-3.5 text-brand-400" />
-            <span>{isSelectionMode ? 'Cancel Selection' : 'Stitch Videos'}</span>
-            {completedVideos.length >= 2 && !isSelectionMode && (
+          {/* Select & Bulk Actions Toggle Button */}
+          {videos.length > 0 && (
+            <button
+              onClick={() => {
+                setIsSelectionMode(!isSelectionMode);
+                if (isSelectionMode) setSelectedIds([]);
+              }}
+              className={`px-3 py-1.5 text-xs rounded-xl flex items-center gap-1.5 transition-all font-medium border shadow-sm ${
+                isSelectionMode
+                  ? 'bg-brand-500/20 text-brand-300 border-brand-500/50 shadow-brand-500/10'
+                  : 'bg-dark-800 text-slate-200 border-dark-700 hover:text-white hover:border-brand-500/40 hover:bg-dark-700'
+              }`}
+              title="Select multiple videos for bulk deletion or stitching"
+            >
+              <CheckSquare className="h-3.5 w-3.5 text-brand-400" />
+              <span>{isSelectionMode ? 'Cancel Selection' : 'Select / Bulk Delete'}</span>
+              {selectedIds.length > 0 && isSelectionMode && (
+                <span className="text-[10px] bg-brand-500/20 text-brand-400 px-1.5 py-0.2 rounded-full font-mono">
+                  {selectedIds.length} selected
+                </span>
+              )}
+            </button>
+          )}
+
+          {/* Stitch Mode Shortcut Button */}
+          {completedVideos.length >= 2 && !isSelectionMode && (
+            <button
+              onClick={() => {
+                setIsSelectionMode(true);
+                setSelectedIds(completedVideos.slice(0, 2).map((v) => v.id));
+              }}
+              className="px-3 py-1.5 text-xs rounded-xl flex items-center gap-1.5 transition-all font-medium border shadow-sm bg-dark-800 text-slate-200 border-dark-700 hover:text-white hover:border-brand-500/40 hover:bg-dark-700"
+              title="Select multiple videos and stitch them together"
+            >
+              <Layers className="h-3.5 w-3.5 text-brand-400" />
+              <span>Stitch Videos</span>
               <span className="text-[10px] bg-brand-500/20 text-brand-400 px-1.5 py-0.2 rounded-full font-mono">
                 {completedVideos.length} ready
               </span>
-            )}
-          </button>
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -209,14 +241,14 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
               <div
                 key={video.id}
                 onClick={() => {
-                  if (isSelectionMode && isCompleted) {
+                  if (isSelectionMode) {
                     toggleSelect(video.id);
                   }
                 }}
                 className={`group bg-dark-800/90 border rounded-2xl overflow-hidden shadow-lg transition-all flex flex-col relative ${
                   isSelected
                     ? 'border-brand-500/80 ring-2 ring-brand-500/20 bg-dark-800'
-                    : isSelectionMode && isCompleted
+                    : isSelectionMode
                     ? 'border-dark-600 hover:border-brand-500/50 cursor-pointer'
                     : 'border-dark-700 hover:border-dark-600 hover:shadow-xl hover:shadow-brand-500/5'
                 }`}
@@ -247,7 +279,7 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
                   )}
 
                   {/* Selection Mode Checkbox Badge */}
-                  {isSelectionMode && isCompleted && (
+                  {isSelectionMode && (
                     <div className="absolute top-2 right-2 z-10">
                       {isSelected ? (
                         <div className="h-6 w-6 rounded-lg bg-brand-500 text-white font-mono text-xs font-bold flex items-center justify-center shadow-lg border border-brand-400">
@@ -468,54 +500,77 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
         </div>
       )}
 
-      {/* Floating Stitch Selection Toolbar */}
+      {/* Floating Bulk Actions Toolbar */}
       {isSelectionMode && (
-        <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-40 bg-dark-900/95 border border-brand-500/40 backdrop-blur-md rounded-2xl shadow-2xl px-5 py-3 flex items-center gap-4 animate-in slide-in-from-bottom-5 duration-200">
-          <div className="flex items-center gap-2 text-xs text-slate-200">
+        <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-40 bg-dark-900/95 border border-brand-500/40 backdrop-blur-md rounded-2xl shadow-2xl px-5 py-3 flex items-center gap-3 sm:gap-4 animate-in slide-in-from-bottom-5 duration-200 max-w-[95vw] overflow-x-auto">
+          <div className="flex items-center gap-2 text-xs text-slate-200 whitespace-nowrap">
             <span className="h-6 w-6 rounded-full bg-brand-500/20 text-brand-400 flex items-center justify-center font-bold text-xs">
               {selectedIds.length}
             </span>
             <span className="font-medium">
               {selectedIds.length === 1
-                ? '1 clip selected (select at least 2)'
-                : `${selectedIds.length} clips selected`}
+                ? '1 video selected'
+                : `${selectedIds.length} videos selected`}
             </span>
           </div>
 
-          <div className="h-4 w-px bg-dark-700" />
+          <div className="h-4 w-px bg-dark-700 shrink-0" />
 
+          {/* Select All / Clear All */}
           <button
-            onClick={handleSelectAllCompleted}
-            className="text-xs text-slate-400 hover:text-white transition-colors flex items-center gap-1"
+            onClick={handleSelectAll}
+            className="text-xs text-slate-300 hover:text-white transition-colors flex items-center gap-1.5 whitespace-nowrap px-2 py-1 rounded-lg hover:bg-dark-800"
           >
-            {selectedIds.length === completedVideos.length ? (
+            {selectedIds.length === filteredVideos.length && filteredVideos.length > 0 ? (
               <>
-                <Square className="h-3.5 w-3.5" />
+                <Square className="h-3.5 w-3.5 text-slate-400" />
                 <span>Clear All</span>
               </>
             ) : (
               <>
-                <CheckSquare className="h-3.5 w-3.5" />
-                <span>Select All</span>
+                <CheckSquare className="h-3.5 w-3.5 text-brand-400" />
+                <span>Select All ({filteredVideos.length})</span>
               </>
             )}
           </button>
 
+          {/* Bulk Delete Button */}
           <button
-            onClick={handleLaunchStitch}
-            disabled={selectedIds.length < 2}
-            className="px-4 py-1.5 rounded-xl bg-brand-500 hover:bg-brand-600 disabled:opacity-40 text-white text-xs font-medium shadow-md shadow-brand-500/20 flex items-center gap-1.5 transition-all"
+            onClick={handleBulkDelete}
+            disabled={selectedIds.length === 0 || isDeleting}
+            className="px-3.5 py-1.5 rounded-xl bg-rose-500/20 border border-rose-500/40 hover:bg-rose-600 hover:border-rose-600 disabled:opacity-40 text-rose-300 hover:text-white text-xs font-medium shadow-md shadow-rose-500/10 flex items-center gap-1.5 transition-all whitespace-nowrap"
+            title="Permanently delete all selected videos from library and disk"
           >
-            <Layers className="h-3.5 w-3.5" />
-            <span>Configure & Stitch ({selectedIds.length})</span>
+            {isDeleting ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <span>Deleting...</span>
+              </>
+            ) : (
+              <>
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>Delete Selected ({selectedIds.length})</span>
+              </>
+            )}
           </button>
+
+          {/* Stitch Shortcut Button (if >= 2 completed videos selected) */}
+          {selectedCompletedVideos.length >= 2 && (
+            <button
+              onClick={handleLaunchStitch}
+              className="px-3.5 py-1.5 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-xs font-medium shadow-md shadow-brand-500/20 flex items-center gap-1.5 transition-all whitespace-nowrap"
+            >
+              <Layers className="h-3.5 w-3.5" />
+              <span>Stitch ({selectedCompletedVideos.length})</span>
+            </button>
+          )}
 
           <button
             onClick={() => {
               setIsSelectionMode(false);
               setSelectedIds([]);
             }}
-            className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-dark-800 transition-colors"
+            className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-dark-800 transition-colors ml-1"
             title="Exit selection mode"
           >
             <X className="h-4 w-4" />

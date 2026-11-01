@@ -10,6 +10,7 @@ import { VideoStitchModal } from './components/VideoStitchModal';
 import { MediaToolsModal } from './components/MediaToolsModal';
 import { BookmarkletModal } from './components/BookmarkletModal';
 import { MobileStreamModal } from './components/MobileStreamModal';
+import { LinkFinderModal } from './components/LinkFinderModal';
 import { fetchVideos, getSystemSettings } from './api';
 import { VideoItem, SystemSettings } from './types';
 
@@ -21,6 +22,7 @@ export const App: React.FC = () => {
   const [showExplainer, setShowExplainer] = useState(false);
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [showBookmarklet, setShowBookmarklet] = useState(false);
+  const [showLinkFinder, setShowLinkFinder] = useState(false);
   const [incomingUrl, setIncomingUrl] = useState<string | undefined>(undefined);
   const [autoStartDownload, setAutoStartDownload] = useState(false);
   const [stitchModalVideos, setStitchModalVideos] = useState<VideoItem[] | null>(null);
@@ -156,6 +158,7 @@ export const App: React.FC = () => {
         onOpenExplainer={() => setShowExplainer(true)}
         onOpenFolderPicker={() => setShowFolderPicker(true)}
         onOpenBookmarklet={() => setShowBookmarklet(true)}
+        onOpenLinkFinder={() => setShowLinkFinder(true)}
       />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
@@ -170,6 +173,7 @@ export const App: React.FC = () => {
           }}
           onOpenFolderPicker={() => setShowFolderPicker(true)}
           onOpenBookmarklet={() => setShowBookmarklet(true)}
+          onOpenLinkFinder={() => setShowLinkFinder(true)}
         />
 
         {/* Active Realtime Downloads */}
@@ -255,6 +259,14 @@ export const App: React.FC = () => {
         <MobileStreamModal
           video={mobileStreamVideo}
           onClose={() => setMobileStreamVideo(null)}
+        />
+      )}
+
+      {/* Video Link Finder Modal */}
+      {showLinkFinder && (
+        <LinkFinderModal
+          onClose={() => setShowLinkFinder(false)}
+          onDownloadQueued={loadVideos}
         />
       )}
     </div>

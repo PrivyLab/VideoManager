@@ -5,11 +5,14 @@ from app.models import (
     BatchDownloadRequest,
     BatchDownloadItem,
     PlaylistInspectRequest,
-    PlaylistInspectResponse
+    PlaylistInspectResponse,
+    FindLinksRequest,
+    FindLinksResponse
 )
 from app.services.download_manager import download_manager
 from app.services.ytdlp_downloader import YtDlpDownloader
 from app.services.chunk_engine import ChunkEngine
+from app.services.video_link_finder import VideoLinkFinder
 from app.services.stream_auth import is_client_localhost
 from app.database import db_get_video, db_get_all_videos
 
@@ -115,11 +118,57 @@ async def inspect_url(req: InspectRequest):
             "ytdlp_error": str(ytdlp_err)
         }
 
+@router.post("/find-links", response_model=FindLinksResponse)
+async def find_video_links_endpoint(req: FindLinksRequest, request: Request):
+    """
+    Scans any website URL to discover embedded videos, direct video links (MP4/WebM),
+    HLS/DASH streaming manifests, and iframe video players using stealth headers and proxy masking.
+    """
+    if not is_client_localhost(request):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: Link finding can only be initiated from localhost."
+        )
+
+    url = req.url.strip() if req.url else ""
+    if not url:
+        raise HTTPException(status_code=400, detail="Webpage URL is required.")
+
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+
+    try:
+        data = await VideoLinkFinder.find_links(
+            url=url,
+            routing_mode=req.routing_mode or "direct",
+            custom_proxy=req.custom_proxy,
+            cookies_from_browser=req.cookies_from_browser,
+            use_stealth=req.use_stealth if req.use_stealth is not None else True
+        )
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Link finding failed: {str(e)}")
+
 @router.get("/active")
 async def get_active_downloads():
     all_videos = db_get_all_videos()
     active = [v for v in all_videos if v["status"] in ("queued", "downloading", "merging")]
     return {"active": active}
+
+@router.post("/cancel-all")
+async def cancel_all_downloads(request: Request):
+    """Cancels all active or queued downloads in the system."""
+    if not is_client_localhost(request):
+        raise HTTPException(status_code=403, detail="Access denied: Only localhost can cancel downloads.")
+
+    all_videos = db_get_all_videos()
+    active = [v["id"] for v in all_videos if v["status"] in ("queued", "downloading", "merging")]
+    cancelled = []
+    for vid in active:
+        res = await download_manager.cancel_download(vid)
+        if res:
+            cancelled.append(vid)
+    return {"success": True, "cancelled_count": len(cancelled), "cancelled_ids": cancelled}
 
 @router.post("/{video_id}/cancel")
 async def cancel_download(video_id: str):

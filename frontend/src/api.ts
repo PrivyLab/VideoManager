@@ -92,6 +92,28 @@ export async function deleteVideo(videoId: string): Promise<void> {
   if (!res.ok) throw new Error('Failed to delete video');
 }
 
+export async function bulkDeleteVideos(videoIds: string[]): Promise<{ success: boolean; deleted_count: number; deleted_ids: string[] }> {
+  const res = await fetch(`${API_BASE}/videos/bulk-delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ video_ids: videoIds }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to delete videos in bulk');
+  }
+  return res.json();
+}
+
+export async function cancelAllDownloads(): Promise<{ success: boolean; cancelled_count: number; cancelled_ids: string[] }> {
+  const res = await fetch(`${API_BASE}/downloads/cancel-all`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to cancel all downloads');
+  }
+  return res.json();
+}
+
 export async function getSystemSettings(): Promise<SystemSettings> {
   const res = await fetch(`${API_BASE}/system/settings`);
   if (!res.ok) throw new Error('Failed to fetch system settings');
@@ -248,6 +270,44 @@ export async function updatePinConfig(
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error('Failed to update PIN security config');
+  return res.json();
+}
+
+export interface DiscoveredVideoLink {
+  url: string;
+  title: string;
+  type: string;
+  format: string;
+  source: string;
+  thumbnail?: string;
+  resolution?: string;
+}
+
+export interface FindLinksResponse {
+  page_url: string;
+  page_title: string;
+  total_found: number;
+  links: DiscoveredVideoLink[];
+  stealth_used: boolean;
+  proxy_used?: string | null;
+}
+
+export async function findVideoLinks(payload: {
+  url: string;
+  routing_mode?: string;
+  custom_proxy?: string;
+  cookies_from_browser?: string;
+  use_stealth?: boolean;
+}): Promise<FindLinksResponse> {
+  const res = await fetch(`${API_BASE}/downloads/find-links`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to find video links' }));
+    throw new Error(err.detail || 'Failed to scan webpage for video links');
+  }
   return res.json();
 }
 

@@ -76,12 +76,35 @@ def test_chunk_engine_merging():
     print("Chunk engine merge test: PASSED")
 
 def test_download_folder_configuration():
+    from app.config import ROOT_DIR, BASE_DIR
+
+    # 1. When .env is NOT present, configuration comes from settings.json
     test_folder = Path("/tmp/videomanager_custom_downloads")
     set_configured_download_dir(str(test_folder))
     configured = get_configured_download_dir()
     assert str(configured) == str(test_folder.resolve())
     assert test_folder.exists()
-    print("Download folder configuration test: PASSED")
+
+    # 2. When .env IS present, take download directory from .env instead of settings.json
+    env_target_file = BASE_DIR / ".env"
+    env_folder = Path("/tmp/videomanager_from_env_downloads")
+    try:
+        with open(env_target_file, "w") as f:
+            f.write(f"DOWNLOAD_DIR={env_folder}\n")
+
+        # Must take from .env instead of settings.json
+        configured_env = get_configured_download_dir()
+        assert str(configured_env) == str(env_folder.resolve())
+        assert env_folder.exists()
+    finally:
+        if env_target_file.exists():
+            env_target_file.unlink()
+
+    # 3. After .env is removed, it seamlessly falls back to settings.json
+    reverted = get_configured_download_dir()
+    assert str(reverted) == str(test_folder.resolve())
+
+    print("Download folder configuration (.env vs settings.json) test: PASSED")
 
 def test_video_stitching():
     import asyncio
@@ -519,6 +542,289 @@ def test_desktop_security_boundaries():
 
     print("Desktop Security & Wi-Fi Boundaries test: PASSED")
 
+def test_video_link_finder():
+    import asyncio
+    import httpx
+    from starlette.testclient import TestClient
+    from app.main import app
+    from app.services.video_link_finder import VideoLinkFinder, MediaHTMLParser
+
+    # 1. Test Stealth Headers
+    target_url = "https://news.example.com/tech/new-video-story"
+    headers = VideoLinkFinder.build_stealth_headers(target_url)
+    assert "Mozilla/5.0" in headers["User-Agent"]
+    assert "Chromium" in headers["Sec-Ch-Ua"]
+    assert headers["Referer"] == "https://news.example.com/"
+    assert headers["Sec-Fetch-Mode"] == "navigate"
+
+    # 2. Test MediaHTMLParser with diverse video embeds & streaming manifests
+    sample_html = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Article with Embedded Media</title>
+      <meta property="og:title" content="Awesome Tech Story">
+      <meta property="og:image" content="https://cdn.example.com/poster.jpg">
+      <meta property="og:video" content="/videos/og_preview.mp4">
+      <meta name="twitter:player:stream" content="https://cdn.example.com/twitter_stream.m3u8">
+    </head>
+    <body>
+      <h1>Article Title</h1>
+      <video poster="/poster2.jpg">
+        <source src="/media/clip_1080p.mp4" type="video/mp4">
+        <source src="https://stream.example.com/master.m3u8" type="application/x-mpegURL">
+      </video>
+      <iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ" width="560" height="315"></iframe>
+      <a href="/downloads/full_episode.mkv">Direct Download MKV</a>
+      <script>
+        var playerConfig = {
+          file: "https://secure.cdn.example.com/jwplayer_stream.mp4",
+          hls: "https://secure.cdn.example.com/hls/live.m3u8"
+        };
+      </script>
+    </body>
+    </html>
+    """
+
+    parser = MediaHTMLParser(base_url="https://news.example.com/tech/new-video-story")
+    parser.feed(sample_html)
+
+    urls_found = [item["url"] for item in parser.media_items]
+    sources_found = [item["source"] for item in parser.media_items]
+
+    assert "https://news.example.com/videos/og_preview.mp4" in urls_found
+    assert "https://cdn.example.com/twitter_stream.m3u8" in urls_found
+    assert "https://news.example.com/media/clip_1080p.mp4" in urls_found
+    assert "https://stream.example.com/master.m3u8" in urls_found
+    assert "https://www.youtube.com/embed/dQw4w9WgXcQ" in urls_found
+    assert "https://news.example.com/downloads/full_episode.mkv" in urls_found
+    assert "https://secure.cdn.example.com/jwplayer_stream.mp4" in urls_found
+    assert "https://secure.cdn.example.com/hls/live.m3u8" in urls_found
+
+    # 3. Test Proxy resolution
+    assert VideoLinkFinder.resolve_proxy("direct") is None
+    assert VideoLinkFinder.resolve_proxy("warp") is not None
+    assert VideoLinkFinder.resolve_proxy("tor") is not None
+    assert VideoLinkFinder.resolve_proxy("custom", "http://127.0.0.1:8888") == "http://127.0.0.1:8888"
+
+    # 4. Test API Endpoint via TestClient (Localhost desktop)
+    # Mock httpx GET for the endpoint test
+    def mock_fetch(request: httpx.Request):
+        return httpx.Response(200, text=sample_html, request=request)
+
+    transport = httpx.MockTransport(mock_fetch)
+
+    # Directly run find_links with mock client
+    async def run_finder_test():
+        orig_async_client = httpx.AsyncClient
+        try:
+            httpx.AsyncClient = lambda **kwargs: orig_async_client(transport=transport, **kwargs)
+            res = await VideoLinkFinder.find_links(
+                url="https://news.example.com/tech/new-video-story",
+                routing_mode="direct",
+                use_stealth=True
+            )
+            assert res["total_found"] >= 7
+            assert res["stealth_used"] is True
+            assert res["page_title"] == "Awesome Tech Story"
+        finally:
+            httpx.AsyncClient = orig_async_client
+
+    asyncio.run(run_finder_test())
+
+    # 5. Localhost vs Non-localhost security on /api/downloads/find-links
+    desktop_client = TestClient(app, client=("127.0.0.1", 54321))
+    phone_client = TestClient(app, client=("192.168.1.55", 54321))
+
+    # Phone is rejected with 403
+    r_phone = phone_client.post("/api/downloads/find-links", json={"url": "https://example.com"})
+    assert r_phone.status_code == 403
+
+    # 6. Test Page with 9 .mp4 links in various formats (nested <a><img>, data attributes, JS JSON)
+    nine_vids_html = """
+    <html>
+    <head><title>Archive Thread 12345</title></head>
+    <body>
+      <div class="post" id="p1">
+        <a class="file" href="/storage/1/vid1.mp4"><img src="/storage/1/thumb1.jpg" alt="Video One"></a>
+      </div>
+      <div class="post" id="p2">
+        <a class="file" href="//cdn.example.com/storage/2/vid2.mp4?token=xyz"><img src="//cdn.example.com/storage/2/thumb2.jpg"></a>
+      </div>
+      <div class="post" id="p3">
+        <a href="https://cdn.example.com/storage/3/vid3.mp4">Download Vid 3</a>
+      </div>
+      <div class="post" id="p4" data-video="/storage/4/vid4.mp4" data-thumb="/storage/4/thumb4.jpg">
+        <span>Post 4 content</span>
+      </div>
+      <div class="post" id="p5">
+        <video src="/storage/5/vid5.mp4" poster="/storage/5/poster5.jpg"></video>
+      </div>
+      <div class="post" id="p6">
+        <video><source src="/storage/6/vid6.mp4" type="video/mp4"></video>
+      </div>
+      <div class="post" id="p7">
+        <a href="/storage/7/vid7.mp4"><img data-src="/storage/7/thumb7.webp" alt="Vid 7"></a>
+      </div>
+      <script>
+        var extra = {
+          "items": [
+            {"url": "https:\\/\\/cdn.example.com\\/storage\\/8\\/vid8.mp4", "thumb": "https:\\/\\/cdn.example.com\\/storage\\/8\\/t8.jpg"},
+            {"file": "https:\\/\\/cdn.example.com\\/storage\\/9\\/vid9.mp4"}
+          ]
+        };
+      </script>
+    </body>
+    </html>
+    """
+
+    def mock_fetch_9(request: httpx.Request):
+        return httpx.Response(200, text=nine_vids_html, request=request)
+
+    async def run_nine_vids_test():
+        orig_async_client = httpx.AsyncClient
+        try:
+            httpx.AsyncClient = lambda **kwargs: orig_async_client(transport=httpx.MockTransport(mock_fetch_9), **kwargs)
+            res = await VideoLinkFinder.find_links(
+                url="https://example.com/thread/12345",
+                routing_mode="direct",
+                use_stealth=True
+            )
+            assert res["total_found"] == 9, f"Expected 9 links, got {res['total_found']}: {[l['url'] for l in res['links']]}"
+            # Ensure thumbnails are associated
+            assert any(l["thumbnail"].endswith("thumb1.jpg") for l in res["links"])
+        finally:
+            httpx.AsyncClient = orig_async_client
+
+    asyncio.run(run_nine_vids_test())
+
+    # 7. Test Homepage Video Cards with Thumbnails
+    homepage_html = """
+    <html>
+    <head><title>VideoShare Homepage</title></head>
+    <body>
+      <div class="video-grid">
+        <div class="video-card">
+          <a href="/watch?v=dQw4w9WgXcQ" title="Rick Astley Video">
+            <img src="https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg" alt="Rick Astley">
+          </a>
+        </div>
+        <div class="video-card">
+          <a href="/video/102938/quantum-physics">
+            <img data-src="https://cdn.example.com/thumbs/102938.webp" alt="Quantum Physics">
+            <span>Quantum Physics in 10 Min</span>
+          </a>
+        </div>
+        <div class="video-card">
+          <a href="/v/super-fast-car" title="Formula 1 Racing">
+            <img data-original="https://cdn.example.com/thumbs/f1.jpg">
+          </a>
+        </div>
+      </div>
+    </body>
+    </html>
+    """
+
+    def mock_fetch_homepage(request: httpx.Request):
+        return httpx.Response(200, text=homepage_html, request=request)
+
+    async def run_homepage_test():
+        orig_async_client = httpx.AsyncClient
+        try:
+            httpx.AsyncClient = lambda **kwargs: orig_async_client(transport=httpx.MockTransport(mock_fetch_homepage), **kwargs)
+            res = await VideoLinkFinder.find_links(
+                url="https://videoshare.example.com/",
+                routing_mode="direct",
+                use_stealth=True
+            )
+            assert res["total_found"] == 3, f"Expected 3 video cards, got {res['total_found']}: {[l['title'] for l in res['links']]}"
+            # Verify thumbnail and title
+            first = res["links"][0]
+            assert "hqdefault.jpg" in first["thumbnail"]
+            assert first["format"] == "Video Card"
+            assert first["type"] == "page_video"
+        finally:
+            httpx.AsyncClient = orig_async_client
+
+    asyncio.run(run_homepage_test())
+
+    # 8. Test Direct .mp4 Input URL
+    async def run_direct_input_test():
+        res = await VideoLinkFinder.find_links(
+            url="https://i.arhivach.vc/storage/1/60/16055607962ecb14d267630ffb206652.mp4",
+            routing_mode="direct"
+        )
+        assert res["total_found"] >= 1
+        assert res["links"][0]["url"] == "https://i.arhivach.vc/storage/1/60/16055607962ecb14d267630ffb206652.mp4"
+        assert res["links"][0]["format"] == "MP4"
+
+    asyncio.run(run_direct_input_test())
+
+    print("Video Link Finder (Stealth & Extraction) test: PASSED")
+
+def test_bulk_delete_and_cancel_all():
+    import tempfile
+    from starlette.testclient import TestClient
+    from app.main import app
+    from app.database import db_create_video, db_get_video, db_delete_video
+
+    desktop_client = TestClient(app, client=("127.0.0.1", 54321))
+    phone_client = TestClient(app, client=("192.168.1.55", 54321))
+
+    # 1. Create temporary files and records
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f1, \
+         tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f2, \
+         tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f3:
+        p1, p2, p3 = f1.name, f2.name, f3.name
+        f1.write(b"video1")
+        f2.write(b"video2")
+        f3.write(b"video3")
+
+    id1, id2, id3 = "bulk_del_1", "bulk_del_2", "bulk_del_3"
+    try:
+        db_create_video({"id": id1, "url": "https://example.com/1.mp4", "title": "Video 1", "file_path": p1, "status": "completed"})
+        db_create_video({"id": id2, "url": "https://example.com/2.mp4", "title": "Video 2", "file_path": p2, "status": "completed"})
+        db_create_video({"id": id3, "url": "https://example.com/3.mp4", "title": "Video 3", "file_path": p3, "status": "completed"})
+
+        # 2. Phone client is rejected with 403 Forbidden
+        r_phone = phone_client.post("/api/videos/bulk-delete", json={"video_ids": [id1, id2]})
+        assert r_phone.status_code == 403
+
+        # 3. Desktop client successfully deletes multiple videos in bulk
+        r_bulk = desktop_client.post("/api/videos/bulk-delete", json={"video_ids": [id1, id2]})
+        assert r_bulk.status_code == 200
+        res = r_bulk.json()
+        assert res["success"] is True
+        assert res["deleted_count"] == 2
+        assert id1 in res["deleted_ids"] and id2 in res["deleted_ids"]
+
+        # Ensure DB records and files are deleted
+        assert db_get_video(id1) is None
+        assert db_get_video(id2) is None
+        assert not os.path.exists(p1)
+        assert not os.path.exists(p2)
+
+        # Ensure non-deleted video 3 remains
+        assert db_get_video(id3) is not None
+        assert os.path.exists(p3)
+
+        # 4. Cancel all endpoint security and execution
+        r_cancel_phone = phone_client.post("/api/downloads/cancel-all")
+        assert r_cancel_phone.status_code == 403
+
+        r_cancel_desk = desktop_client.post("/api/downloads/cancel-all")
+        assert r_cancel_desk.status_code == 200
+        assert r_cancel_desk.json()["success"] is True
+
+        print("Bulk Delete & Cancel All API test: PASSED")
+    finally:
+        db_delete_video(id1)
+        db_delete_video(id2)
+        db_delete_video(id3)
+        for p in (p1, p2, p3):
+            if os.path.exists(p):
+                os.unlink(p)
+
 if __name__ == "__main__":
     test_db_operations()
     test_chunk_engine_merging()
@@ -532,4 +838,6 @@ if __name__ == "__main__":
     test_stream_encryption_and_pin_security()
     test_single_direct_video_stream()
     test_desktop_security_boundaries()
+    test_video_link_finder()
+    test_bulk_delete_and_cancel_all()
     print("ALL TESTS PASSED SUCCESSFULLY!")

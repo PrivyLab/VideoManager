@@ -28,6 +28,7 @@ interface DownloadCardProps {
   onDownloadStarted: () => void;
   onOpenFolderPicker: () => void;
   onOpenBookmarklet?: () => void;
+  onOpenLinkFinder?: () => void;
 }
 
 export const DownloadCard: React.FC<DownloadCardProps> = ({
@@ -37,6 +38,7 @@ export const DownloadCard: React.FC<DownloadCardProps> = ({
   onDownloadStarted,
   onOpenFolderPicker,
   onOpenBookmarklet,
+  onOpenLinkFinder,
 }) => {
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
@@ -412,6 +414,19 @@ export const DownloadCard: React.FC<DownloadCardProps> = ({
             <Settings2 className="h-3.5 w-3.5" />
             <span>Options</span>
           </button>
+
+          {/* Link Finder button */}
+          {onOpenLinkFinder && (
+            <button
+              type="button"
+              onClick={onOpenLinkFinder}
+              className="text-xs px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition-all bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 hover:text-white border border-indigo-500/30 shadow-sm"
+              title="Scan any webpage for embedded video links"
+            >
+              <Search className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Link Finder</span>
+            </button>
+          )}
 
           {/* Bookmarklet 1-Click button */}
           {onOpenBookmarklet && (

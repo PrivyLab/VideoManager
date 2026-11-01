@@ -75,6 +75,30 @@ class PlaylistInspectResponse(BaseModel):
     total_count: int
     items: List[PlaylistItem]
 
+class DiscoveredVideoLink(BaseModel):
+    url: str
+    title: str
+    type: str
+    format: str
+    source: str
+    thumbnail: Optional[str] = ""
+    resolution: Optional[str] = ""
+
+class FindLinksRequest(BaseModel):
+    url: str
+    routing_mode: Optional[str] = "direct"
+    custom_proxy: Optional[str] = None
+    cookies_from_browser: Optional[str] = None
+    use_stealth: Optional[bool] = True
+
+class FindLinksResponse(BaseModel):
+    page_url: str
+    page_title: str
+    total_found: int
+    links: List[DiscoveredVideoLink]
+    stealth_used: bool
+    proxy_used: Optional[str] = None
+
 class VideoResponse(BaseModel):
     id: str
     url: str
@@ -169,3 +193,6 @@ class PinVerifyRequest(BaseModel):
 class PinConfigRequest(BaseModel):
     pin: Optional[str] = None
     pin_enabled: Optional[bool] = None
+
+class BulkDeleteRequest(BaseModel):
+    video_ids: List[str]

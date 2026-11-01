@@ -1,7 +1,7 @@
 import React from 'react';
-import { Loader2, XCircle, ArrowDownCircle, Layers, Zap } from 'lucide-react';
+import { Loader2, XCircle, ArrowDownCircle, Layers, Zap, Ban } from 'lucide-react';
 import { VideoItem } from '../types';
-import { cancelDownload } from '../api';
+import { cancelDownload, cancelAllDownloads } from '../api';
 
 interface ActiveDownloadsProps {
   downloads: VideoItem[];
@@ -12,10 +12,28 @@ export const ActiveDownloads: React.FC<ActiveDownloadsProps> = ({ downloads }) =
 
   return (
     <div className="space-y-3">
-      <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-        <ArrowDownCircle className="h-4 w-4 text-brand-400 animate-bounce" />
-        Active Downloads ({downloads.length})
-      </h3>
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+          <ArrowDownCircle className="h-4 w-4 text-brand-400 animate-bounce" />
+          Active Downloads ({downloads.length})
+        </h3>
+
+        {downloads.length > 1 && (
+          <button
+            type="button"
+            onClick={async () => {
+              if (window.confirm(`Are you sure you want to cancel all ${downloads.length} active downloads?`)) {
+                await cancelAllDownloads();
+              }
+            }}
+            className="text-xs text-rose-400 hover:text-rose-300 font-medium flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-500/10 border border-rose-500/30 hover:bg-rose-500/20 transition-all"
+            title="Cancel all active downloads"
+          >
+            <Ban className="h-3 w-3" />
+            <span>Cancel All ({downloads.length})</span>
+          </button>
+        )}
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {downloads.map((item) => (

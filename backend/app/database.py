@@ -46,15 +46,20 @@ def init_db():
     conn.close()
 
 def db_create_video(video_data: Dict[str, Any]):
+    if "created_at" not in video_data:
+        from datetime import datetime
+        video_data["created_at"] = datetime.now().isoformat()
     conn = get_connection()
-    cursor = conn.cursor()
-    keys = list(video_data.keys())
-    placeholders = ",".join(["?" for _ in keys])
-    col_names = ",".join(keys)
-    values = [video_data[k] for k in keys]
-    cursor.execute(f"INSERT INTO videos ({col_names}) VALUES ({placeholders})", values)
-    conn.commit()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        keys = list(video_data.keys())
+        placeholders = ",".join(["?" for _ in keys])
+        col_names = ",".join(keys)
+        values = [video_data[k] for k in keys]
+        cursor.execute(f"INSERT INTO videos ({col_names}) VALUES ({placeholders})", values)
+        conn.commit()
+    finally:
+        conn.close()
 
 def db_update_video(video_id: str, updates: Dict[str, Any]):
     if not updates:

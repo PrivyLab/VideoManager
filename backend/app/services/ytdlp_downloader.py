@@ -25,6 +25,13 @@ def parse_time_seconds(val: Optional[str]) -> Optional[float]:
         return None
     return None
 
+class YtDlpQuietLogger:
+    """Suppresses stderr logging from yt-dlp when probing unsupported or custom URLs."""
+    def debug(self, msg): pass
+    def info(self, msg): pass
+    def warning(self, msg): pass
+    def error(self, msg): pass
+
 class YtDlpDownloader:
     """Wrapper around yt-dlp Python API with real-time async callbacks."""
 
@@ -58,6 +65,7 @@ class YtDlpDownloader:
         use_tor: bool = False,
         custom_proxy: Optional[str] = None,
         routing_mode: Optional[str] = None,
+        cookies_from_browser: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Extract metadata without downloading."""
         headers: Dict[str, str] = {
@@ -79,6 +87,7 @@ class YtDlpDownloader:
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
+            'logger': YtDlpQuietLogger(),
             'http_headers': headers,
         }
 
@@ -86,10 +95,25 @@ class YtDlpDownloader:
         if proxy:
             ydl_opts['proxy'] = proxy
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if not info:
-                raise ValueError("Could not extract video metadata.")
+        if cookies_from_browser and cookies_from_browser.strip():
+            browser = cookies_from_browser.strip().lower()
+            ydl_opts['cookiesfrombrowser'] = (browser,)
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as e:
+            if 'cookiesfrombrowser' in ydl_opts:
+                # macOS permission (TCC) or browser cookie database not found:
+                # Automatically retry anonymously without browser cookies!
+                ydl_opts.pop('cookiesfrombrowser', None)
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+            else:
+                raise e
+
+        if not info:
+            raise ValueError("Could not extract video metadata.")
 
             formats = []
             if 'formats' in info:
@@ -143,6 +167,7 @@ class YtDlpDownloader:
             'noplaylist': False,
             'quiet': True,
             'no_warnings': True,
+            'logger': YtDlpQuietLogger(),
             'playlist_items': f"1-{max_entries}",
             'http_headers': headers,
         }
@@ -155,10 +180,19 @@ class YtDlpDownloader:
             browser = cookies_from_browser.strip().lower()
             ydl_opts['cookiesfrombrowser'] = (browser,)
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if not info:
-                raise ValueError("Could not extract playlist information.")
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as e:
+            if 'cookiesfrombrowser' in ydl_opts:
+                ydl_opts.pop('cookiesfrombrowser', None)
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+            else:
+                raise e
+
+        if not info:
+            raise ValueError("Could not extract playlist information.")
 
             is_playlist = info.get('_type') == 'playlist' or 'entries' in info
             raw_entries = info.get('entries') if is_playlist else [info]
@@ -321,19 +355,28 @@ class YtDlpDownloader:
                 pass
 
         def _run_ydl():
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                actual_filename = ydl.prepare_filename(info)
-                if not Path(actual_filename).exists():
-                    stem = Path(actual_filename).stem
-                    matches = list(dest_dir.glob(f"{stem}.*"))
-                    if matches:
-                        actual_filename = str(matches[0])
-                final_file_info["file_path"] = actual_filename
-                final_file_info["title"] = info.get("title", "Untitled")
-                final_file_info["duration"] = info.get("duration", 0)
-                final_file_info["thumbnail"] = info.get("thumbnail", "")
-                final_file_info["resolution"] = f"{info.get('width', '')}x{info.get('height', '')}"
-                return final_file_info
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+            except Exception as e:
+                if 'cookiesfrombrowser' in ydl_opts:
+                    ydl_opts.pop('cookiesfrombrowser', None)
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(url, download=True)
+                else:
+                    raise e
+
+            actual_filename = ydl.prepare_filename(info)
+            if not Path(actual_filename).exists():
+                stem = Path(actual_filename).stem
+                matches = list(dest_dir.glob(f"{stem}.*"))
+                if matches:
+                    actual_filename = str(matches[0])
+            final_file_info["file_path"] = actual_filename
+            final_file_info["title"] = info.get("title", "Untitled")
+            final_file_info["duration"] = info.get("duration", 0)
+            final_file_info["thumbnail"] = info.get("thumbnail", "")
+            final_file_info["resolution"] = f"{info.get('width', '')}x{info.get('height', '')}"
+            return final_file_info
 
         return await loop.run_in_executor(None, _run_ydl)

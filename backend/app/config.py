@@ -3,7 +3,100 @@ from pathlib import Path
 from typing import Optional
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+ROOT_DIR = BASE_DIR.parent
 STORAGE_DIR = BASE_DIR / "storage"
+
+def find_env_file() -> Optional[Path]:
+    """Finds .env file at workspace root, backend dir, or current working dir."""
+    candidates = [
+        ROOT_DIR / ".env",
+        BASE_DIR / ".env",
+        Path.cwd() / ".env",
+    ]
+    for c in candidates:
+        if c.exists() and c.is_file():
+            return c
+    return None
+
+def get_env_download_dir() -> Optional[Path]:
+    """
+    Checks if a .env file is present and extracts the download video directory from it.
+    Checks common variable names: DOWNLOAD_DIR, DOWNLOAD_FOLDER, DOWNLOADS_DIR,
+    VIDEOS_DIR, VIDEO_DOWNLOAD_DIR, DOWNLOAD_VIDEOS_DIR, DOWNLOAD_PATH, etc.
+    """
+    env_file = find_env_file()
+    if not env_file:
+        return None
+
+    env_dict = {}
+    try:
+        from dotenv import dotenv_values
+        env_dict = dotenv_values(env_file)
+    except Exception:
+        pass
+
+    # Fallback to direct parsing if dotenv_values returned empty
+    if not env_dict:
+        try:
+            with open(env_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        env_dict[k.strip()] = v.strip().strip('"').strip("'")
+        except Exception:
+            pass
+
+    possible_keys = [
+        "DOWNLOAD_DIR", "DOWNLOAD_FOLDER", "DOWNLOADS_DIR",
+        "VIDEOS_DIR", "VIDEO_DOWNLOAD_DIR", "DOWNLOAD_VIDEOS_DIR",
+        "DOWNLOAD_PATH", "VIDEOS_PATH", "DOWNLOAD_VIDEO_DIR"
+    ]
+
+    for key in possible_keys:
+        val = env_dict.get(key)
+        if val is None:
+            val = os.environ.get(key)
+        if val and str(val).strip():
+            clean_str = str(val).strip().strip('"').strip("'")
+            if clean_str:
+                p = Path(clean_str).expanduser().resolve()
+                try:
+                    p.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    pass
+                return p
+
+    # If .env is present, check any key matching DOWNLOAD and DIR/FOLDER/PATH
+    for k, v in env_dict.items():
+        if "DOWNLOAD" in k.upper() and ("DIR" in k.upper() or "PATH" in k.upper() or "FOLDER" in k.upper()):
+            clean_str = str(v).strip().strip('"').strip("'")
+            if clean_str:
+                p = Path(clean_str).expanduser().resolve()
+                try:
+                    p.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    pass
+                return p
+
+    # Fallback to os.environ if set
+    env_os = os.environ.get("DOWNLOAD_DIR")
+    if env_os and env_os.strip():
+        p = Path(env_os.strip()).expanduser().resolve()
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    return None
+
+# Load .env into os.environ if present at startup
+_env_path = find_env_file()
+if _env_path:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_path, override=True)
+    except Exception:
+        pass
+
 DEFAULT_VIDEOS_DIR = Path(os.environ.get("DOWNLOAD_DIR", str(STORAGE_DIR / "videos"))).expanduser().resolve()
 VIDEOS_DIR = DEFAULT_VIDEOS_DIR  # Alias for backwards compatibility
 THUMBNAILS_DIR = STORAGE_DIR / "thumbnails"
@@ -75,7 +168,17 @@ def get_active_warp_proxy() -> Optional[str]:
     return None
 
 def get_configured_download_dir() -> Path:
-    """Get the currently configured default download directory."""
+    """
+    Get the currently configured default download directory.
+    Priority:
+    1. If .env file is present, take download video directory from .env instead of settings.json.
+    2. Otherwise, take download video directory from settings.json.
+    3. Fallback to DEFAULT_VIDEOS_DIR.
+    """
+    env_dir = get_env_download_dir()
+    if env_dir:
+        return env_dir
+
     if SETTINGS_FILE.exists():
         try:
             import json
@@ -91,10 +194,23 @@ def get_configured_download_dir() -> Path:
     return DEFAULT_VIDEOS_DIR
 
 def set_configured_download_dir(path_str: str) -> Path:
-    """Save user-chosen default download directory."""
+    """
+    Save user-chosen default download directory.
+    If .env is present, updates .env; also writes to settings.json for backward compatibility.
+    """
     import json
     p = Path(path_str).expanduser().resolve()
     p.mkdir(parents=True, exist_ok=True)
+
+    env_file = find_env_file()
+    if env_file:
+        try:
+            from dotenv import set_key
+            set_key(env_file, "DOWNLOAD_DIR", str(p))
+            os.environ["DOWNLOAD_DIR"] = str(p)
+        except Exception:
+            pass
+
     with open(SETTINGS_FILE, "w") as f:
         json.dump({"download_folder": str(p)}, f)
     return p
@@ -126,6 +242,16 @@ def cleanup_video_artifacts(video_id: str, file_path: Optional[str] = None, keep
     If keep_final is False, also deletes the final video file and thumbnail.
     """
     import shutil
+
+    # If keep_final is False and a specific final file_path is given, delete it directly
+    if not keep_final and file_path:
+        try:
+            p = Path(file_path)
+            if p.exists() and p.is_file():
+                p.unlink()
+        except Exception:
+            pass
+
     storage_dirs = [DEFAULT_VIDEOS_DIR, get_configured_download_dir()]
     if file_path:
         storage_dirs.append(Path(file_path).parent)

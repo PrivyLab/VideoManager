@@ -80,7 +80,7 @@ export interface BatchDownloadPayload {
   download_folder?: string;
   cookies_from_browser?: string;
   referer?: string;
-  routing_mode?: 'direct' | 'warp' | 'tor';
+  routing_mode?: 'direct' | 'warp' | 'tor' | 'custom';
   custom_proxy?: string;
   use_tor?: boolean;
 }

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Film, HardDrive, Layers, Folder, Bookmark } from 'lucide-react';
+import { Film, HardDrive, Layers, Folder, Bookmark, Search } from 'lucide-react';
 import { formatBytes } from '../api';
 import { SystemSettings } from '../types';
 
@@ -12,6 +12,7 @@ interface NavbarProps {
   onOpenExplainer: () => void;
   onOpenFolderPicker: () => void;
   onOpenBookmarklet: () => void;
+  onOpenLinkFinder: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -23,6 +24,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenExplainer,
   onOpenFolderPicker,
   onOpenBookmarklet,
+  onOpenLinkFinder,
 }) => {
   return (
     <header className="border-b border-dark-700 bg-dark-900/80 backdrop-blur-md sticky top-0 z-40">
@@ -45,6 +47,16 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Stats & Actions */}
         <div className="flex items-center space-x-3">
+          {/* Link Finder button */}
+          <button
+            onClick={onOpenLinkFinder}
+            className="flex items-center space-x-1.5 text-xs text-indigo-400 hover:text-white bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 px-3 py-1.5 rounded-lg transition-all shadow-sm"
+            title="Scan any website for embedded video links"
+          >
+            <Search className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline font-medium">Link Finder</span>
+          </button>
+
           {/* Bookmarklet 1-Click button */}
           <button
             onClick={onOpenBookmarklet}

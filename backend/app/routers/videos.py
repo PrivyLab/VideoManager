@@ -9,7 +9,7 @@ from app.database import db_get_all_videos, db_get_video, db_delete_video, db_cr
 from app.config import DEFAULT_VIDEOS_DIR, VIDEOS_DIR, cleanup_video_artifacts
 from app.models import (
     StitchRequest, ExtractAudioRequest, CompressVideoRequest, CreateGifRequest, TrimRequest,
-    PinVerifyRequest, PinConfigRequest
+    PinVerifyRequest, PinConfigRequest, BulkDeleteRequest
 )
 from app.services.download_manager import download_manager
 from app.services.video_stitcher import VideoStitcher
@@ -190,6 +190,35 @@ async def get_video_file_info(video_id: str):
         "file_size": file_size,
         "streamable_in_browser": content_type in ("video/mp4", "video/webm", "video/ogg"),
         "needs_remux": real_ext == "ts" or content_type == "video/mp2t",
+    }
+
+
+@router.post("/bulk-delete")
+async def bulk_delete_videos(req: BulkDeleteRequest, request: Request):
+    """Deletes multiple videos and their stored files/artifacts in a single operation."""
+    if not is_client_localhost(request):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: Bulk video deletion can only be performed locally."
+        )
+
+    if not req.video_ids:
+        raise HTTPException(status_code=400, detail="No video IDs provided for deletion.")
+
+    deleted_count = 0
+    deleted_ids = []
+    for vid in req.video_ids:
+        video = db_get_video(vid)
+        if video:
+            cleanup_video_artifacts(vid, video.get("file_path"))
+            db_delete_video(vid)
+            deleted_count += 1
+            deleted_ids.append(vid)
+
+    return {
+        "success": True,
+        "deleted_count": deleted_count,
+        "deleted_ids": deleted_ids
     }
 
 
