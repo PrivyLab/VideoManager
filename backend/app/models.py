@@ -86,3 +86,26 @@ class NetworkStatusResponse(BaseModel):
     in_docker: bool
     warp: ProxyEndpointStatus
     tor: ProxyEndpointStatus
+
+class TrimRequest(BaseModel):
+    start_time: float
+    end_time: float
+    title: Optional[str] = None
+    mode: Optional[str] = "fast"  # "fast" or "reencode"
+
+class ExtractAudioRequest(BaseModel):
+    format: Optional[str] = "mp3"  # "mp3", "m4a", "aac", "wav"
+    bitrate: Optional[str] = "192k"
+    title: Optional[str] = None
+
+class CompressVideoRequest(BaseModel):
+    preset: Optional[str] = "balanced"  # "light", "balanced", "discord"
+    resolution: Optional[str] = "same"   # "same", "1080p", "720p", "480p"
+    title: Optional[str] = None
+
+class CreateGifRequest(BaseModel):
+    start_time: Optional[float] = 0.0
+    duration: Optional[float] = 5.0
+    fps: Optional[int] = 15
+    width: Optional[int] = 480
+    title: Optional[str] = None

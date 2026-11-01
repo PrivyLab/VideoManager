@@ -12,7 +12,11 @@ import {
   Check,
   CheckSquare,
   Square,
-  X
+  X,
+  Music,
+  Scissors,
+  Sparkles,
+  Minimize2
 } from 'lucide-react';
 import { VideoItem } from '../types';
 import { formatBytes, formatDuration, deleteVideo, retryDownload } from '../api';
@@ -22,6 +26,7 @@ interface VideoGridProps {
   onPlayVideo: (video: VideoItem) => void;
   onRefresh: () => void;
   onOpenStitchModal: (selected: VideoItem[]) => void;
+  onOpenMediaTools: (video: VideoItem, initialTab?: 'audio' | 'compress' | 'gif' | 'trim') => void;
 }
 
 export const VideoGrid: React.FC<VideoGridProps> = ({
@@ -29,6 +34,7 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
   onPlayVideo,
   onRefresh,
   onOpenStitchModal,
+  onOpenMediaTools,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filter, setFilter] = useState<'all' | 'completed' | 'failed'>('all');
@@ -214,7 +220,16 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
               >
                 {/* Media Thumbnail Container */}
                 <div className="relative aspect-video bg-dark-900 overflow-hidden flex items-center justify-center">
-                  {video.thumbnail_url ? (
+                  {video.file_format === 'mp3' || video.downloader_type === 'audio' ? (
+                    <div className="flex flex-col items-center justify-center gap-1.5 text-brand-400 bg-gradient-to-br from-brand-950/80 to-dark-900 w-full h-full">
+                      <div className="h-12 w-12 rounded-full bg-brand-500/20 flex items-center justify-center">
+                        <Music className="h-6 w-6 text-brand-400" />
+                      </div>
+                      <span className="text-[10px] font-mono tracking-wider text-brand-300 uppercase font-semibold">
+                        Audio Track
+                      </span>
+                    </div>
+                  ) : video.thumbnail_url ? (
                     <img
                       src={video.thumbnail_url}
                       alt={video.title}
@@ -278,7 +293,7 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
                   )}
 
                   {/* Top Badges */}
-                  <div className="absolute top-2 left-2 flex items-center gap-1.5">
+                  <div className="absolute top-2 left-2 flex items-center gap-1.5 flex-wrap">
                     <span className="bg-dark-900/80 backdrop-blur-sm text-slate-300 text-[10px] font-mono uppercase px-2 py-0.5 rounded border border-dark-700">
                       {video.file_format || 'mp4'}
                     </span>
@@ -290,6 +305,26 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
                     {video.downloader_type === 'stitch' && (
                       <span className="bg-purple-900/80 backdrop-blur-sm text-purple-300 text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1 font-mono border border-purple-700/60">
                         <Layers className="h-2.5 w-2.5" /> Stitched
+                      </span>
+                    )}
+                    {video.downloader_type === 'audio' && (
+                      <span className="bg-amber-900/80 backdrop-blur-sm text-amber-300 text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1 font-mono border border-amber-700/60">
+                        <Music className="h-2.5 w-2.5" /> Audio Track
+                      </span>
+                    )}
+                    {video.downloader_type === 'compress' && (
+                      <span className="bg-emerald-900/80 backdrop-blur-sm text-emerald-300 text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1 font-mono border border-emerald-700/60">
+                        <Minimize2 className="h-2.5 w-2.5" /> Compressed
+                      </span>
+                    )}
+                    {video.downloader_type === 'gif' && (
+                      <span className="bg-pink-900/80 backdrop-blur-sm text-pink-300 text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1 font-mono border border-pink-700/60">
+                        <Sparkles className="h-2.5 w-2.5" /> Animated GIF
+                      </span>
+                    )}
+                    {video.downloader_type === 'trim' && (
+                      <span className="bg-teal-900/80 backdrop-blur-sm text-teal-300 text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1 font-mono border border-teal-700/60">
+                        <Scissors className="h-2.5 w-2.5" /> Clip
                       </span>
                     )}
                   </div>
@@ -344,6 +379,40 @@ export const VideoGrid: React.FC<VideoGridProps> = ({
                           >
                             <Play className="h-4 w-4" />
                           </button>
+                          {video.file_format !== 'mp3' && video.downloader_type !== 'audio' && (
+                            <>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onOpenMediaTools(video, 'audio');
+                                }}
+                                className="p-1.5 text-slate-400 hover:text-amber-400 hover:bg-dark-700 rounded-lg transition-colors"
+                                title="Extract Audio (MP3 / M4A)"
+                              >
+                                <Music className="h-4 w-4" />
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onOpenMediaTools(video, 'compress');
+                                }}
+                                className="p-1.5 text-slate-400 hover:text-emerald-400 hover:bg-dark-700 rounded-lg transition-colors"
+                                title="Compress / Shrink File"
+                              >
+                                <Minimize2 className="h-4 w-4" />
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onOpenMediaTools(video, 'gif');
+                                }}
+                                className="p-1.5 text-slate-400 hover:text-pink-400 hover:bg-dark-700 rounded-lg transition-colors"
+                                title="Convert to GIF / Trim"
+                              >
+                                <Scissors className="h-4 w-4" />
+                              </button>
+                            </>
+                          )}
                           <a
                             href={`/api/videos/${video.id}/download`}
                             download

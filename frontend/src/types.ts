@@ -13,7 +13,7 @@ export interface VideoItem {
   speed?: string;
   eta?: string;
   error_message?: string;
-  downloader_type: 'ytdlp' | 'chunked' | 'direct' | 'auto' | 'stitch';
+  downloader_type: 'ytdlp' | 'chunked' | 'direct' | 'auto' | 'stitch' | 'audio' | 'compress' | 'gif' | 'trim';
   chunks_total?: number;
   chunks_completed?: number;
   created_at: string;
@@ -128,4 +128,31 @@ export interface StitchPreviewResponse {
   total_duration: number;
   total_size: number;
   compatible_for_fast: boolean;
+}
+
+export interface ExtractAudioPayload {
+  format?: 'mp3' | 'm4a' | 'aac' | 'wav';
+  bitrate?: string;
+  title?: string;
+}
+
+export interface CompressVideoPayload {
+  preset?: 'light' | 'balanced' | 'discord';
+  resolution?: 'same' | '1080p' | '720p' | '480p';
+  title?: string;
+}
+
+export interface CreateGifPayload {
+  start_time?: number;
+  duration?: number;
+  fps?: number;
+  width?: number;
+  title?: string;
+}
+
+export interface TrimVideoPayload {
+  start_time: number;
+  end_time: number;
+  title?: string;
+  mode?: 'fast' | 'reencode';
 }

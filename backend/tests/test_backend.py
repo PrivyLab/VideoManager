@@ -8,6 +8,7 @@ from app.database import init_db, db_create_video, db_get_video, db_update_video
 from app.services.chunk_engine import ChunkEngine
 from app.config import get_configured_download_dir, set_configured_download_dir
 from app.services.video_stitcher import VideoStitcher
+from app.services.media_tools import extract_audio, compress_video, create_gif, trim_video
 
 def test_db_operations():
     init_db()
@@ -121,9 +122,42 @@ def test_video_stitching():
     thumb.unlink(missing_ok=True)
     print("Video stitching test: PASSED")
 
+def test_media_tools():
+    import asyncio
+    import subprocess
+
+    source = Path("/tmp/test_source_media.mp4")
+    cmd = ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=duration=2:size=320x240:rate=30", "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-c:v", "libx264", "-c:a", "aac", "-pix_fmt", "yuv420p", str(source)]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    out_mp3 = Path("/tmp/test_out.mp3")
+    out_compressed = Path("/tmp/test_out_comp.mp4")
+    out_gif = Path("/tmp/test_out.gif")
+
+    async def run_tools():
+        res_mp3 = await extract_audio(source, out_mp3, audio_format="mp3")
+        res_comp = await compress_video(source, out_compressed, preset="balanced")
+        res_gif = await create_gif(source, out_gif, start_time=0.0, duration=1.0, fps=12, width=320)
+        return res_mp3, res_comp, res_gif
+
+    res_mp3, res_comp, res_gif = asyncio.run(run_tools())
+
+    assert out_mp3.exists() and out_mp3.stat().st_size > 500
+    assert out_compressed.exists() and out_compressed.stat().st_size > 500
+    assert out_gif.exists() and out_gif.stat().st_size > 500
+
+    # Cleanup
+    source.unlink(missing_ok=True)
+    out_mp3.unlink(missing_ok=True)
+    out_compressed.unlink(missing_ok=True)
+    out_gif.unlink(missing_ok=True)
+    Path("/tmp/test_out_comp_thumb.jpg").unlink(missing_ok=True)
+    print("Media Tools (Extract Audio, Compress, GIF) test: PASSED")
+
 if __name__ == "__main__":
     test_db_operations()
     test_chunk_engine_merging()
     test_download_folder_configuration()
     test_video_stitching()
+    test_media_tools()
     print("ALL TESTS PASSED SUCCESSFULLY!")

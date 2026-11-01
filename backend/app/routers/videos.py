@@ -1,13 +1,16 @@
 import os
+import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
 from fastapi import APIRouter, HTTPException, Header, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
-from app.database import db_get_all_videos, db_get_video, db_delete_video
+from app.database import db_get_all_videos, db_get_video, db_delete_video, db_create_video
 from app.config import DEFAULT_VIDEOS_DIR, VIDEOS_DIR, cleanup_video_artifacts
-from app.models import StitchRequest
+from app.models import StitchRequest, ExtractAudioRequest, CompressVideoRequest, CreateGifRequest, TrimRequest
 from app.services.download_manager import download_manager
 from app.services.video_stitcher import VideoStitcher
+from app.services.media_tools import extract_audio, compress_video, create_gif, trim_video
 
 router = APIRouter(prefix="/api/videos", tags=["videos"])
 
@@ -204,6 +207,214 @@ async def download_file(video_id: str):
         filename=filename,
         media_type="application/octet-stream"
     )
+
+
+@router.post("/{video_id}/extract-audio")
+async def extract_audio_endpoint(video_id: str, req: ExtractAudioRequest):
+    """Extracts MP3, M4A, or AAC audio from a downloaded video."""
+    video = db_get_video(video_id)
+    if not video or not video.get("file_path"):
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    src_path = Path(video["file_path"])
+    if not src_path.exists():
+        raise HTTPException(status_code=404, detail="Source video file not found on disk")
+
+    fmt = (req.format or "mp3").lower().strip()
+    bitrate = req.bitrate or "192k"
+    new_id = str(uuid.uuid4())[:8]
+
+    safe_title = req.title.strip() if req.title and req.title.strip() else f"{video.get('title', 'audio')}_audio"
+    out_filename = f"{new_id}_{safe_title.replace(' ', '_').replace('/', '_')}.{fmt}"
+    out_path = src_path.parent / out_filename
+
+    try:
+        res = await extract_audio(src_path, out_path, audio_format=fmt, bitrate=bitrate)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Audio extraction failed: {str(e)}")
+
+    now = datetime.utcnow().isoformat()
+    record = {
+        "id": new_id,
+        "url": f"extracted://{video_id}",
+        "title": safe_title,
+        "duration": res["duration"] or video.get("duration", 0),
+        "file_path": str(out_path),
+        "file_size": res["file_size"],
+        "file_format": fmt,
+        "thumbnail_url": video.get("thumbnail_url") or "",
+        "resolution": "Audio",
+        "status": "completed",
+        "progress": 100.0,
+        "speed": "",
+        "eta": "",
+        "error_message": "",
+        "downloader_type": "audio",
+        "chunks_total": 0,
+        "chunks_completed": 0,
+        "created_at": now,
+        "completed_at": now
+    }
+    db_create_video(record)
+    await download_manager.broadcast({"event": "video_created", "video": record})
+    return {"success": True, "video": record}
+
+
+@router.post("/{video_id}/compress")
+async def compress_video_endpoint(video_id: str, req: CompressVideoRequest):
+    """Compresses large video using H.264 CRF for WhatsApp, Discord, or web sharing."""
+    video = db_get_video(video_id)
+    if not video or not video.get("file_path"):
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    src_path = Path(video["file_path"])
+    if not src_path.exists():
+        raise HTTPException(status_code=404, detail="Source video file not found on disk")
+
+    new_id = str(uuid.uuid4())[:8]
+    safe_title = req.title.strip() if req.title and req.title.strip() else f"{video.get('title', 'video')}_compressed"
+    out_filename = f"{new_id}_{safe_title.replace(' ', '_').replace('/', '_')}.mp4"
+    out_path = src_path.parent / out_filename
+
+    try:
+        res = await compress_video(src_path, out_path, preset=req.preset or "balanced", resolution=req.resolution or "same")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Video compression failed: {str(e)}")
+
+    now = datetime.utcnow().isoformat()
+    record = {
+        "id": new_id,
+        "url": f"compressed://{video_id}",
+        "title": safe_title,
+        "duration": res["duration"] or video.get("duration", 0),
+        "file_path": str(out_path),
+        "file_size": res["file_size"],
+        "file_format": "mp4",
+        "thumbnail_url": res.get("thumbnail_url") or video.get("thumbnail_url") or "",
+        "resolution": res.get("resolution") or video.get("resolution") or "1080p",
+        "status": "completed",
+        "progress": 100.0,
+        "speed": "",
+        "eta": "",
+        "error_message": "",
+        "downloader_type": "compress",
+        "chunks_total": 0,
+        "chunks_completed": 0,
+        "created_at": now,
+        "completed_at": now
+    }
+    db_create_video(record)
+    await download_manager.broadcast({"event": "video_created", "video": record})
+    return {"success": True, "video": record}
+
+
+@router.post("/{video_id}/gif")
+async def create_gif_endpoint(video_id: str, req: CreateGifRequest):
+    """Converts a video segment into a high-quality animated GIF with 2-pass palettegen."""
+    video = db_get_video(video_id)
+    if not video or not video.get("file_path"):
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    src_path = Path(video["file_path"])
+    if not src_path.exists():
+        raise HTTPException(status_code=404, detail="Source video file not found on disk")
+
+    new_id = str(uuid.uuid4())[:8]
+    safe_title = req.title.strip() if req.title and req.title.strip() else f"{video.get('title', 'clip')}_gif"
+    out_filename = f"{new_id}_{safe_title.replace(' ', '_').replace('/', '_')}.gif"
+    out_path = src_path.parent / out_filename
+
+    try:
+        res = await create_gif(
+            src_path,
+            out_path,
+            start_time=req.start_time or 0.0,
+            duration=req.duration or 5.0,
+            fps=req.fps or 15,
+            width=req.width or 480
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"GIF creation failed: {str(e)}")
+
+    now = datetime.utcnow().isoformat()
+    record = {
+        "id": new_id,
+        "url": f"gif://{video_id}",
+        "title": safe_title,
+        "duration": res["duration"],
+        "file_path": str(out_path),
+        "file_size": res["file_size"],
+        "file_format": "gif",
+        "thumbnail_url": video.get("thumbnail_url") or "",
+        "resolution": res.get("resolution") or "480px",
+        "status": "completed",
+        "progress": 100.0,
+        "speed": "",
+        "eta": "",
+        "error_message": "",
+        "downloader_type": "gif",
+        "chunks_total": 0,
+        "chunks_completed": 0,
+        "created_at": now,
+        "completed_at": now
+    }
+    db_create_video(record)
+    await download_manager.broadcast({"event": "video_created", "video": record})
+    return {"success": True, "video": record}
+
+
+@router.post("/{video_id}/trim")
+async def trim_video_endpoint(video_id: str, req: TrimRequest):
+    """Trims video between start and end timestamps."""
+    video = db_get_video(video_id)
+    if not video or not video.get("file_path"):
+        raise HTTPException(status_code=404, detail="Video not found")
+
+    src_path = Path(video["file_path"])
+    if not src_path.exists():
+        raise HTTPException(status_code=404, detail="Source video file not found on disk")
+
+    new_id = str(uuid.uuid4())[:8]
+    safe_title = req.title.strip() if req.title and req.title.strip() else f"{video.get('title', 'video')}_trimmed"
+    out_filename = f"{new_id}_{safe_title.replace(' ', '_').replace('/', '_')}.mp4"
+    out_path = src_path.parent / out_filename
+
+    try:
+        res = await trim_video(
+            src_path,
+            out_path,
+            start_time=req.start_time,
+            end_time=req.end_time,
+            mode=req.mode or "fast"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Trimming failed: {str(e)}")
+
+    now = datetime.utcnow().isoformat()
+    record = {
+        "id": new_id,
+        "url": f"trimmed://{video_id}",
+        "title": safe_title,
+        "duration": res["duration"],
+        "file_path": str(out_path),
+        "file_size": res["file_size"],
+        "file_format": "mp4",
+        "thumbnail_url": res.get("thumbnail_url") or video.get("thumbnail_url") or "",
+        "resolution": res.get("resolution") or video.get("resolution") or "1080p",
+        "status": "completed",
+        "progress": 100.0,
+        "speed": "",
+        "eta": "",
+        "error_message": "",
+        "downloader_type": "trim",
+        "chunks_total": 0,
+        "chunks_completed": 0,
+        "created_at": now,
+        "completed_at": now
+    }
+    db_create_video(record)
+    await download_manager.broadcast({"event": "video_created", "video": record})
+    return {"success": True, "video": record}
 
 
 @router.get("/{video_id}/thumbnail")

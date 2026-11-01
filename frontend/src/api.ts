@@ -8,6 +8,10 @@ import {
   StitchRequestPayload,
   StitchPreviewResponse,
   NetworkStatusResponse,
+  ExtractAudioPayload,
+  CompressVideoPayload,
+  CreateGifPayload,
+  TrimVideoPayload,
 } from './types';
 
 const API_BASE = '/api';
@@ -117,6 +121,58 @@ export async function previewStitch(payload: StitchRequestPayload): Promise<Stit
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || 'Failed to generate stitch preview');
+  }
+  return res.json();
+}
+
+export async function extractAudio(videoId: string, payload: ExtractAudioPayload): Promise<{ success: boolean; video: VideoItem }> {
+  const res = await fetch(`${API_BASE}/videos/${videoId}/extract-audio`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to extract audio');
+  }
+  return res.json();
+}
+
+export async function compressVideo(videoId: string, payload: CompressVideoPayload): Promise<{ success: boolean; video: VideoItem }> {
+  const res = await fetch(`${API_BASE}/videos/${videoId}/compress`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to compress video');
+  }
+  return res.json();
+}
+
+export async function createGif(videoId: string, payload: CreateGifPayload): Promise<{ success: boolean; video: VideoItem }> {
+  const res = await fetch(`${API_BASE}/videos/${videoId}/gif`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to create GIF');
+  }
+  return res.json();
+}
+
+export async function trimVideo(videoId: string, payload: TrimVideoPayload): Promise<{ success: boolean; video: VideoItem }> {
+  const res = await fetch(`${API_BASE}/videos/${videoId}/trim`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to trim video');
   }
   return res.json();
 }

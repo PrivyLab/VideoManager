@@ -7,6 +7,7 @@ import { VideoPlayerModal } from './components/VideoPlayerModal';
 import { ChunkEngineExplainer } from './components/ChunkEngineExplainer';
 import { FolderPickerModal } from './components/FolderPickerModal';
 import { VideoStitchModal } from './components/VideoStitchModal';
+import { MediaToolsModal } from './components/MediaToolsModal';
 import { fetchVideos, getSystemSettings } from './api';
 import { VideoItem, SystemSettings } from './types';
 
@@ -18,6 +19,7 @@ export const App: React.FC = () => {
   const [showExplainer, setShowExplainer] = useState(false);
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [stitchModalVideos, setStitchModalVideos] = useState<VideoItem[] | null>(null);
+  const [mediaToolsTarget, setMediaToolsTarget] = useState<{ video: VideoItem; initialTab: 'audio' | 'compress' | 'gif' | 'trim' } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   const loadVideos = useCallback(async () => {
@@ -153,6 +155,7 @@ export const App: React.FC = () => {
           onPlayVideo={(video) => setPlayingVideo(video)}
           onRefresh={loadVideos}
           onOpenStitchModal={(selected) => setStitchModalVideos(selected)}
+          onOpenMediaTools={(video, initialTab = 'audio') => setMediaToolsTarget({ video, initialTab })}
         />
       </main>
 
@@ -161,6 +164,20 @@ export const App: React.FC = () => {
         video={playingVideo}
         onClose={() => setPlayingVideo(null)}
       />
+
+      {/* Media Studio & Converter Modal (Audio, Compress, GIF, Trim) */}
+      {mediaToolsTarget && (
+        <MediaToolsModal
+          video={mediaToolsTarget.video}
+          initialTab={mediaToolsTarget.initialTab}
+          onClose={() => setMediaToolsTarget(null)}
+          onSuccess={() => {
+            setMediaToolsTarget(null);
+            loadVideos();
+            loadSettings();
+          }}
+        />
+      )}
 
       {/* Video Stitching Modal */}
       {stitchModalVideos && (
