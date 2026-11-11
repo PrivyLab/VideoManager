@@ -4,6 +4,8 @@ A modern, high-performance video download, streaming, processing, and media mana
 
 Built for power users who want full control over their media downloads, parallel chunking, anti-blocking network routing, automated link scraping, local Wi-Fi mobile streaming, and post-processing tools — with zero cloud lock-in.
 
+> **Building toward a full video editor?** See the [VideoManager roadmap](./ROADMAP.md) for a phased plan covering a timeline editor, format conversion, creative controls, and advanced workflows.
+
 ---
 
 ## 🌟 Key Features
