@@ -140,6 +140,31 @@ VideoManager supports configuring the video download directory via `.env` or the
 
 ---
 
+## 🧪 Phase 0A Local Infrastructure
+
+Phase 0A uses a separate Compose file to start the FastAPI API, React/Vite frontend, local PostgreSQL, and optional LocalStack. It does not change or start the existing `docker-compose.yml` application, Tor, or WARP services. The browser UI is available at `http://127.0.0.1:5173`; Vite proxies API and WebSocket requests to FastAPI inside the shared app network namespace, and only the frontend port is exposed to the host. PostgreSQL is bound to loopback. The existing backend still uses SQLite until its PostgreSQL data-access and migration work is implemented.
+
+The Compose file reuses the already-pulled `bitnami/postgresql:latest` image and will not pull it automatically. Start the API, frontend, and PostgreSQL with:
+
+```bash
+docker compose -f docker-compose.phase0.yml up -d --build
+docker compose -f docker-compose.phase0.yml ps
+```
+
+The API source and frontend source are mounted for reload during development. PostgreSQL is available on `127.0.0.1:5433`. The local-only defaults are in `.env.example`; Compose also works with those defaults when no root `.env` file is present. Do not reuse the sample credentials outside local development.
+
+The pulled LocalStack image requires a valid auth token. When an AWS API integration test needs it, set `LOCALSTACK_AUTH_TOKEN` in your local shell or ignored `.env` (never commit it), then start the optional AWS profile:
+
+```bash
+docker compose --profile aws -f docker-compose.phase0.yml up -d localstack
+```
+
+Its S3 endpoint is `http://127.0.0.1:4566`. LocalStack is only for AWS API integration tests that Phase 0A actually needs; downloader media is streamed directly and must not be stored in S3 or sent through SQS.
+
+Stop the services with `docker compose -f docker-compose.phase0.yml down`. The PostgreSQL volume is retained; `docker compose -f docker-compose.phase0.yml down -v` removes that local database data.
+
+---
+
 ## 🚀 Running Locally (Without Docker)
 
 ### Option 1: Automated Script
@@ -179,6 +204,7 @@ npm run dev
 VideoManager/
 ├── Dockerfile                      # Multi-stage production container build (Node + Python + ffmpeg)
 ├── docker-compose.yml              # Pre-configured container & host volume mounts
+├── docker-compose.phase0.yml       # Isolated local PostgreSQL and LocalStack services
 ├── start.sh                        # Automated local startup script
 ├── backend/
 │   ├── app/

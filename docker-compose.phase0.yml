@@ -1,0 +1,80 @@
+name: videomanager-phase0
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      DOWNLOAD_DIR: /app/storage/videos
+      RUNNING_IN_DOCKER: "true"
+    ports:
+      - "127.0.0.1:${PHASE0_FRONTEND_PORT:-5173}:5173"
+    volumes:
+      - ./backend/app:/app/app
+      - phase0_app_storage:/app/storage
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/docs"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  frontend:
+    image: node:20-alpine
+    working_dir: /workspace/frontend
+    command: sh -c "npm ci && npm run dev -- --host 0.0.0.0"
+    volumes:
+      - ./frontend:/workspace/frontend
+      - phase0_frontend_node_modules:/workspace/frontend/node_modules
+    network_mode: service:api
+    depends_on:
+      api:
+        condition: service_healthy
+
+  postgres:
+    image: bitnami/postgresql:latest
+    pull_policy: never
+    environment:
+      POSTGRESQL_USERNAME: ${PHASE0_POSTGRES_USER:-videomanager}
+      POSTGRESQL_PASSWORD: ${PHASE0_POSTGRES_PASSWORD:-videomanager-local-only}
+      POSTGRESQL_DATABASE: ${PHASE0_POSTGRES_DB:-videomanager}
+      POSTGRESQL_POSTGRES_PASSWORD: ${PHASE0_POSTGRES_ADMIN_PASSWORD:-videomanager-admin-local-only}
+    ports:
+      - "127.0.0.1:${PHASE0_POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - phase0_postgres_data:/bitnami/postgresql
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "pg_isready",
+          "-h",
+          "127.0.0.1",
+          "-p",
+          "5432",
+          "-U",
+          "${PHASE0_POSTGRES_USER:-videomanager}",
+          "-d",
+          "${PHASE0_POSTGRES_DB:-videomanager}",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  localstack:
+    image: localstack/localstack:latest
+    pull_policy: never
+    profiles:
+      - aws
+    environment:
+      SERVICES: ${PHASE0_LOCALSTACK_SERVICES:-s3}
+      AWS_DEFAULT_REGION: ${PHASE0_AWS_REGION:-us-east-1}
+      LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN:-}
+    ports:
+      - "127.0.0.1:${PHASE0_LOCALSTACK_PORT:-4566}:4566"
+
+volumes:
+  phase0_app_storage:
+  phase0_frontend_node_modules:
+  phase0_postgres_data:
