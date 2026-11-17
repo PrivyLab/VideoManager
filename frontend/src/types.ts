@@ -10,6 +10,7 @@ export interface VideoItem {
   resolution?: string;
   status: 'queued' | 'downloading' | 'merging' | 'completed' | 'failed' | 'cancelled';
   progress: number;
+  message?: string;
   speed?: string;
   eta?: string;
   error_message?: string;
@@ -153,6 +154,7 @@ export interface StitchRequestPayload {
   video_ids: string[];
   title?: string;
   mode?: 'auto' | 'fast' | 'reencode';
+  quality?: 'source' | '1080p' | '720p' | '480p';
 }
 
 export interface StitchClipInfo {

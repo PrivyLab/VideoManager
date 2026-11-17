@@ -86,7 +86,7 @@ export const ActiveDownloads: React.FC<ActiveDownloadsProps> = ({ downloads }) =
                   {item.status === 'merging' ? (
                     <>
                       <Loader2 className="h-3 w-3 animate-spin text-purple-400" />
-                      <span className="text-purple-400">Assembling & Storing...</span>
+                      <span className="text-purple-400">{item.message || 'Assembling & Storing...'}</span>
                     </>
                   ) : (
                     <>

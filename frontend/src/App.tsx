@@ -102,6 +102,7 @@ export const App: React.FC = () => {
                     ...v,
                     status: data.status || v.status,
                     progress: data.progress !== undefined ? data.progress : v.progress,
+                    message: data.message !== undefined ? data.message : v.message,
                     speed: data.speed !== undefined ? data.speed : v.speed,
                     eta: data.eta !== undefined ? data.eta : v.eta,
                     chunks_total: data.chunks_total || v.chunks_total,

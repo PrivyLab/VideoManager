@@ -109,7 +109,8 @@ async def stitch_videos_endpoint(req: StitchRequest):
         job_id = await download_manager.start_stitch(
             video_ids=req.video_ids,
             title=req.title,
-            mode=req.mode or "auto"
+            mode=req.mode or "auto",
+            quality=req.quality,
         )
         return {"success": True, "video_id": job_id}
     except ValueError as ve:

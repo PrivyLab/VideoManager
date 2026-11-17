@@ -48,13 +48,14 @@ class VideoStitcher:
         cmd = [
             self.ffprobe_bin,
             "-v", "error",
-            "-show_entries", "stream=index,codec_type,codec_name,width,height,r_frame_rate,sample_rate",
+            "-show_entries",
+            "stream=index,codec_type,codec_name,profile,level,width,height,r_frame_rate,avg_frame_rate,pix_fmt,sample_rate,channels,channel_layout",
             "-show_entries", "format=duration,size,bit_rate",
             "-of", "json",
             str(file_path)
         ]
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            res = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
             data = json.loads(res.stdout)
             streams = data.get("streams", [])
             video_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
@@ -65,6 +66,7 @@ class VideoStitcher:
             size = int(fmt.get("size", 0) or file_path.stat().st_size)
             width = int(video_stream.get("width", 0) or 0) if video_stream else 0
             height = int(video_stream.get("height", 0) or 0) if video_stream else 0
+            audio_channels = int(audio_stream.get("channels", 0) or 0) if audio_stream else 0
 
             return {
                 "file_path": str(file_path),
@@ -74,23 +76,133 @@ class VideoStitcher:
                 "has_audio": audio_stream is not None,
                 "video_codec": video_stream.get("codec_name") if video_stream else None,
                 "audio_codec": audio_stream.get("codec_name") if audio_stream else None,
+                "video_profile": video_stream.get("profile") if video_stream else None,
+                "video_level": video_stream.get("level") if video_stream else None,
+                "video_pixel_format": video_stream.get("pix_fmt") if video_stream else None,
+                "video_frame_rate": video_stream.get("avg_frame_rate") if video_stream else None,
+                "audio_sample_rate": audio_stream.get("sample_rate") if audio_stream else None,
+                "audio_channels": audio_channels,
+                "audio_channel_layout": audio_stream.get("channel_layout") if audio_stream else None,
                 "width": width,
                 "height": height,
                 "resolution": f"{width}x{height}" if width and height else "unknown",
             }
-        except Exception:
+        except Exception as exc:
             return {
                 "file_path": str(file_path),
                 "duration": 0,
                 "size": file_path.stat().st_size if file_path.exists() else 0,
-                "has_video": True,
-                "has_audio": True,
+                "has_video": False,
+                "has_audio": False,
                 "video_codec": None,
                 "audio_codec": None,
                 "width": 0,
                 "height": 0,
                 "resolution": "unknown",
+                "probe_error": str(exc),
             }
+
+    @staticmethod
+    def _can_fast_copy(probed_info: List[Dict[str, Any]]) -> bool:
+        if not probed_info or any(not item.get("has_video") or not item.get("has_audio") for item in probed_info):
+            return False
+
+        signature_keys = (
+            "video_codec",
+            "video_profile",
+            "video_level",
+            "video_pixel_format",
+            "video_frame_rate",
+            "width",
+            "height",
+            "audio_codec",
+            "audio_sample_rate",
+            "audio_channels",
+            "audio_channel_layout",
+        )
+        signatures = {
+            tuple(item.get(key) for key in signature_keys)
+            for item in probed_info
+        }
+        return (
+            len(signatures) == 1
+            and all(item.get("video_codec") == "h264" for item in probed_info)
+            and all(item.get("video_pixel_format") == "yuv420p" for item in probed_info)
+            and all(item.get("audio_codec") == "aac" for item in probed_info)
+        )
+
+    async def _verify_video_output(self, output_path: Path):
+        info = self.probe_video(output_path)
+        if not info.get("has_video"):
+            raise RuntimeError("Stitching output contains no readable video stream.")
+
+        proc = await asyncio.create_subprocess_exec(
+            self.ffmpeg_bin,
+            "-v", "error",
+            "-i", str(output_path),
+            "-map", "0:v:0",
+            "-frames:v", "1",
+            "-f", "null",
+            "-",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError("Timed out while validating the stitched video stream.")
+        if proc.returncode != 0:
+            err_msg = stderr.decode("utf-8", errors="ignore")[-500:]
+            raise RuntimeError(f"Stitched video stream is not decodable: {err_msg}")
+
+    @staticmethod
+    def _parse_ffmpeg_time(value: str) -> Optional[float]:
+        try:
+            hours, minutes, seconds = value.split(":")
+            return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+        except (ValueError, TypeError):
+            return None
+
+    async def _run_ffmpeg_with_progress(
+        self,
+        cmd: List[str],
+        total_duration: float,
+        progress_cb: Optional[Callable[[Dict[str, Any]], None]],
+        progress_start: float,
+        progress_end: float,
+        stage: str,
+    ) -> Tuple[int, bytes]:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stderr_task = asyncio.create_task(proc.stderr.read())
+        last_progress = progress_start
+
+        while line := await proc.stdout.readline():
+            key, separator, value = line.decode("utf-8", errors="ignore").strip().partition("=")
+            if not separator or key != "out_time":
+                continue
+            elapsed = self._parse_ffmpeg_time(value)
+            if elapsed is None or total_duration <= 0 or not progress_cb:
+                continue
+            progress = min(
+                progress_end,
+                progress_start + (elapsed / total_duration) * (progress_end - progress_start),
+            )
+            if progress - last_progress >= 0.5:
+                last_progress = progress
+                progress_cb({
+                    "status": "merging",
+                    "progress": round(progress, 1),
+                    "message": f"{stage} {round(progress, 0):.0f}%",
+                })
+
+        await proc.wait()
+        return int(proc.returncode or 0), await stderr_task
 
     async def generate_thumbnail(self, video_path: Path, thumb_path: Path) -> Optional[str]:
         """Generate a JPEG thumbnail at 1s timestamp."""
@@ -109,14 +221,25 @@ class VideoStitcher:
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL
             )
-            await proc.wait()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=30)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                return None
             if thumb_path.exists() and thumb_path.stat().st_size > 0:
                 return str(thumb_path)
         except Exception:
             pass
         return None
 
-    async def _stitch_fast_copy(self, input_paths: List[Path], output_path: Path) -> bool:
+    async def _stitch_fast_copy(
+        self,
+        input_paths: List[Path],
+        output_path: Path,
+        total_duration: float = 0,
+        progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> bool:
         """Concatenate files using ffmpeg's concat demuxer with stream copy."""
         concat_file = output_path.parent / f"_concat_{self.job_id}.txt"
         try:
@@ -133,17 +256,22 @@ class VideoStitcher:
                 "-i", str(concat_file),
                 "-c", "copy",
                 "-movflags", "+faststart",
+                "-nostats",
+                "-stats_period", "0.5",
+                "-progress", "pipe:1",
                 str(output_path)
             ]
 
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+            return_code, _ = await self._run_ffmpeg_with_progress(
+                cmd,
+                total_duration,
+                progress_cb,
+                progress_start=35,
+                progress_end=85,
+                stage="Joining clips:",
             )
-            stdout, stderr = await proc.communicate()
 
-            if proc.returncode == 0 and output_path.exists() and output_path.stat().st_size > 1024:
+            if return_code == 0 and output_path.exists() and output_path.stat().st_size > 1024:
                 return True
             return False
         finally:
@@ -158,18 +286,14 @@ class VideoStitcher:
         input_paths: List[Path],
         probed_info: List[Dict[str, Any]],
         output_path: Path,
-        progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None
+        progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
+        quality: str = "source",
     ):
         """
         Concatenate files using ffmpeg concat filter, re-encoding video to standard H.264/AAC.
         Normalizes differing resolutions and handles missing audio tracks cleanly.
         """
-        # Determine target resolution (max width and height or 1920x1080)
-        max_w = max([p["width"] for p in probed_info if p.get("width")] or [1920])
-        max_h = max([p["height"] for p in probed_info if p.get("height")] or [1080])
-        # Ensure dimensions are even numbers (required by libx264)
-        target_w = max_w + (max_w % 2)
-        target_h = max_h + (max_h % 2)
+        target_w, target_h = self._target_dimensions(probed_info, quality)
 
         cmd = [self.ffmpeg_bin, "-y"]
         for p in input_paths:
@@ -209,6 +333,9 @@ class VideoStitcher:
             "-c:a", "aac",
             "-b:a", "128k",
             "-movflags", "+faststart",
+            "-nostats",
+            "-stats_period", "0.5",
+            "-progress", "pipe:1",
             str(output_path)
         ])
 
@@ -219,16 +346,49 @@ class VideoStitcher:
                 "message": "Re-encoding and stitching video clips with ffmpeg..."
             })
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+        return_code, stderr = await self._run_ffmpeg_with_progress(
+            cmd,
+            sum(info.get("duration", 0) for info in probed_info),
+            progress_cb,
+            progress_start=40,
+            progress_end=85,
+            stage="Re-encoding clips:",
         )
-        stdout, stderr = await proc.communicate()
 
-        if proc.returncode != 0:
+        if return_code != 0:
             err_msg = stderr.decode("utf-8", errors="ignore")[-500:]
             raise RuntimeError(f"FFmpeg stitching failed: {err_msg}")
+
+    @staticmethod
+    def _target_dimensions(probed_info: List[Dict[str, Any]], quality: str) -> Tuple[int, int]:
+        if quality == "source":
+            max_w = max([p["width"] for p in probed_info if p.get("width")] or [1920])
+            max_h = max([p["height"] for p in probed_info if p.get("height")] or [1080])
+            return max_w + (max_w % 2), max_h + (max_h % 2)
+
+        preset_dimensions = {
+            "1080p": (1920, 1080),
+            "720p": (1280, 720),
+            "480p": (854, 480),
+        }
+        if quality not in preset_dimensions:
+            raise ValueError(f"Unsupported stitch quality: {quality}")
+
+        cap_w, cap_h = preset_dimensions[quality]
+        first_clip = next(
+            (item for item in probed_info if item.get("width") and item.get("height")),
+            None,
+        )
+        if not first_clip:
+            return cap_w, cap_h
+
+        source_w, source_h = first_clip["width"], first_clip["height"]
+        if source_h > source_w:
+            cap_w, cap_h = cap_h, cap_w
+        scale = min(1.0, cap_w / source_w, cap_h / source_h)
+        target_w = min(cap_w, source_w // 2 * 2, max(2, int(round(source_w * scale / 2)) * 2))
+        target_h = min(cap_h, source_h // 2 * 2, max(2, int(round(source_h * scale / 2)) * 2))
+        return target_w, target_h
 
     async def stitch(
         self,
@@ -236,7 +396,8 @@ class VideoStitcher:
         output_dir: Path,
         output_filename: Optional[str] = None,
         mode: str = "auto",
-        progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None
+        progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
+        quality: str = "source",
     ) -> Dict[str, Any]:
         """
         Executes the stitching operation across multiple video files.
@@ -265,13 +426,18 @@ class VideoStitcher:
             *[loop.run_in_executor(None, self.probe_video, p) for p in input_paths]
         )
 
+        for index, info in enumerate(probed, start=1):
+            if not info.get("has_video"):
+                detail = info.get("probe_error")
+                suffix = f" ({detail})" if detail else ""
+                raise ValueError(f"Input clip {index} has no readable video stream{suffix}.")
+
         total_input_duration = sum(p["duration"] for p in probed)
-        all_same_res = len(set(p["resolution"] for p in probed)) == 1 and probed[0]["resolution"] != "unknown"
-        all_same_codec = len(set(p["video_codec"] for p in probed)) == 1 and probed[0]["video_codec"] is not None
+        fast_copy_compatible = self._can_fast_copy(probed)
 
         success = False
 
-        if mode in ("fast", "auto"):
+        if mode == "fast" or (mode == "auto" and fast_copy_compatible and quality == "source"):
             if progress_cb:
                 progress_cb({
                     "status": "merging",
@@ -279,7 +445,12 @@ class VideoStitcher:
                     "message": "Attempting fast stream-copy merge..."
                 })
 
-            success = await self._stitch_fast_copy(input_paths, output_path)
+            success = await self._stitch_fast_copy(
+                input_paths,
+                output_path,
+                total_duration=sum(p["duration"] for p in probed),
+                progress_cb=progress_cb,
+            )
 
         if not success:
             if mode == "fast":
@@ -296,7 +467,9 @@ class VideoStitcher:
                     "message": "Normalizing formats and stitching with ffmpeg re-encode..."
                 })
 
-            await self._stitch_reencode(input_paths, probed, output_path, progress_cb)
+            await self._stitch_reencode(
+                input_paths, probed, output_path, quality=quality, progress_cb=progress_cb
+            )
             success = output_path.exists() and output_path.stat().st_size > 0
 
         if not success:
@@ -306,13 +479,22 @@ class VideoStitcher:
             progress_cb({
                 "status": "merging",
                 "progress": 90.0,
-                "message": "Generating thumbnail and finalizing video metadata..."
+                "message": "Validating stitched video..."
             })
 
         # Final probe on the output video
         final_info = await loop.run_in_executor(None, self.probe_video, output_path)
+        if not final_info.get("has_video"):
+            raise RuntimeError("Stitching completed without a readable video stream.")
+        await self._verify_video_output(output_path)
 
         # Generate thumbnail
+        if progress_cb:
+            progress_cb({
+                "status": "merging",
+                "progress": 95.0,
+                "message": "Generating preview thumbnail..."
+            })
         thumb_path = output_dir / f"{output_path.stem}_thumb.jpg"
         thumb_file = await self.generate_thumbnail(output_path, thumb_path)
         thumbnail_url = f"/api/videos/{self.job_id}/thumbnail" if thumb_file else ""

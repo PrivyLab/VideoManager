@@ -1,3 +1,5 @@
+from urllib.parse import urlparse
+
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
 from app.models import (
     DownloadRequest,
@@ -11,7 +13,12 @@ from app.models import (
 )
 from app.services.download_manager import download_manager
 from app.services.ytdlp_downloader import YtDlpDownloader
-from app.services.chunk_engine import ChunkEngine
+from app.services.chunk_engine import (
+    ChunkEngine,
+    DIRECT_VIDEO_PATH_EXTENSIONS,
+    is_media_content_type,
+    query_video_extension_from_url,
+)
 from app.services.video_link_finder import VideoLinkFinder
 from app.services.stream_auth import is_client_localhost
 from app.database import db_get_video, db_get_all_videos
@@ -97,6 +104,31 @@ async def inspect_url(req: InspectRequest):
     url = req.url
     if not url:
         raise HTTPException(status_code=400, detail="URL is required")
+
+    query_media_ext = query_video_extension_from_url(url)
+    path_ext = urlparse(url).path.lower()
+    if query_media_ext and not any(path_ext.endswith(ext) for ext in DIRECT_VIDEO_PATH_EXTENSIONS):
+        engine = ChunkEngine("inspect")
+        try:
+            probe = await engine.probe_url(url)
+        finally:
+            engine.cleanup()
+        if is_media_content_type(probe.get("content_type", ""), f"probe{query_media_ext}"):
+            return {
+                "source": "direct",
+                "info": {
+                    "title": f"Direct video ({query_media_ext[1:]})",
+                    "duration": 0,
+                    "thumbnail": "",
+                    "formats": [{
+                        "format_id": "direct",
+                        "ext": query_media_ext[1:],
+                        "resolution": "Direct stream",
+                        "filesize": probe.get("content_length") or None,
+                    }],
+                    "probe": probe,
+                },
+            }
 
     # Try yt-dlp first
     try:

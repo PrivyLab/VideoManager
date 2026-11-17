@@ -30,6 +30,7 @@ export const VideoStitchModal: React.FC<VideoStitchModalProps> = ({
   const [orderedVideos, setOrderedVideos] = useState<VideoItem[]>(initialVideos);
   const [outputTitle, setOutputTitle] = useState('');
   const [stitchMode, setStitchMode] = useState<'auto' | 'fast' | 'reencode'>('auto');
+  const [outputQuality, setOutputQuality] = useState<'source' | '1080p' | '720p' | '480p'>('source');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<StitchPreviewResponse | null>(null);
@@ -90,6 +91,7 @@ export const VideoStitchModal: React.FC<VideoStitchModalProps> = ({
         video_ids: orderedVideos.map((v) => v.id),
         title: outputTitle.trim() || 'Stitched_Video',
         mode: stitchMode,
+        quality: outputQuality,
       });
 
       onStitchSuccess(res.video_id);
@@ -248,6 +250,36 @@ export const VideoStitchModal: React.FC<VideoStitchModalProps> = ({
             />
           </div>
 
+          {/* Output Quality */}
+          <div className="space-y-1.5">
+            <label htmlFor="stitch-quality" className="text-xs font-medium text-slate-300">
+              Final Output Quality
+            </label>
+            <select
+              id="stitch-quality"
+              value={outputQuality}
+              onChange={(e) => {
+                const value = e.target.value;
+                if (value === 'source' || value === '1080p' || value === '720p' || value === '480p') {
+                  setOutputQuality(value);
+                }
+              }}
+              className="w-full bg-dark-800 border border-dark-700 rounded-xl px-3.5 py-2 text-xs text-slate-200 outline-none focus:border-brand-500 transition-colors"
+            >
+              <option value="source">Match source (current sizing)</option>
+              <option value="1080p">1080p maximum</option>
+              <option value="720p">720p maximum</option>
+              <option value="480p">480p maximum</option>
+            </select>
+            <p className="text-[11px] text-slate-400 leading-snug">
+              {stitchMode === 'fast'
+                ? 'Fast Stream Copy keeps the original quality and ignores this setting.'
+                : outputQuality === 'source'
+                  ? 'Keeps the current sizing behavior.'
+                  : 'Uses the first clip’s orientation, caps its size at the selected resolution, and re-encodes all clips. Lower resolutions can be faster and smaller.'}
+            </p>
+          </div>
+
           {/* Stitch Engine Mode */}
           <div className="space-y-2">
             <label className="text-xs font-medium text-slate-300">Merge Processing Mode</label>
@@ -267,7 +299,7 @@ export const VideoStitchModal: React.FC<VideoStitchModalProps> = ({
                   <span>Smart Auto</span>
                 </div>
                 <p className="text-[11px] text-slate-400 mt-1 leading-snug">
-                  Tries instant lossless concat first; auto-reencodes if codecs or dimensions differ.
+                  Uses stream copy only for matching browser-friendly H.264/AAC clips; otherwise re-encodes for compatibility.
                 </p>
               </button>
 
@@ -286,7 +318,7 @@ export const VideoStitchModal: React.FC<VideoStitchModalProps> = ({
                   <span>Fast Stream Copy</span>
                 </div>
                 <p className="text-[11px] text-slate-400 mt-1 leading-snug">
-                  Direct bitstream join without re-encoding. Instant & lossless (same codec required).
+                  Copies the original streams without re-encoding. Instant and lossless, but browser playback depends on the source codecs.
                 </p>
               </button>
 
@@ -305,7 +337,7 @@ export const VideoStitchModal: React.FC<VideoStitchModalProps> = ({
                   <span>Safe Re-encode</span>
                 </div>
                 <p className="text-[11px] text-slate-400 mt-1 leading-snug">
-                  Normalizes all clips to standard 1080p MP4. Guarantees playback on all mixed formats.
+                  Re-encodes clips to compatible H.264/AAC streams at the selected output quality.
                 </p>
               </button>
             </div>

@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 
 class DownloadRequest(BaseModel):
     url: str
@@ -149,6 +149,7 @@ class StitchRequest(BaseModel):
     video_ids: List[str]
     title: Optional[str] = None
     mode: Optional[str] = "auto"  # "auto", "fast", "reencode"
+    quality: Literal["source", "1080p", "720p", "480p"] = "source"
 
 class ProxyEndpointStatus(BaseModel):
     available: bool

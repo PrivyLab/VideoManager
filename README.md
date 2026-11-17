@@ -71,7 +71,10 @@ Built for power users who want full control over their media downloads, parallel
 - **Audio Track Extractor**: Convert videos to MP3, M4A, AAC, or WAV with selectable bitrates (128k, 192k, 256k, 320k).
 - **Video Compressor**: Compress large media files (High, Balanced, or Maximum Compression) or specify an exact target size (e.g. 25 MB for Discord/email).
 - **GIF Generator**: Create animated GIFs from video clips with custom FPS, resolution, and repeat settings.
-- **Multi-Video Stitcher**: Merge and concatenate multiple downloaded clips into a single video file.
+- **Multi-Video Stitcher**: Reorder and merge multiple downloaded clips into one video.
+  - **Processing modes**: Smart Auto uses stream copy when the clips are compatible and otherwise re-encodes; Fast Stream Copy preserves the original streams; Safe Re-encode normalizes the clips for playback compatibility.
+  - **Final output quality**: Choose Match source (the default), 1080p, 720p, or 480p. Resolution presets follow the first clip's orientation, do not upscale that clip, and re-encode the clips. Choosing a lower resolution can reduce processing time and output size.
+  - Fast Stream Copy preserves the source resolution and quality, so it ignores the selected resolution preset. Smart Auto honors an explicit resolution preset by re-encoding.
 - **Bulk Video Library Management & Deletion**:
   - **Multi-Select Mode**: Select multiple videos across completed, failed, or cancelled downloads.
   - **Bulk Deletion**: Delete all selected videos and purge their stored media files from the disk in a single click with confirmation protection.

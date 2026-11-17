@@ -12,7 +12,14 @@ from fastapi import WebSocket
 from app.database import db_create_video, db_update_video, db_get_video, db_get_all_videos
 from app.config import get_configured_download_dir, cleanup_video_artifacts
 from app.models import DownloadRequest
-from app.services.chunk_engine import ChunkEngine
+from app.services.chunk_engine import (
+    ChunkEngine,
+    DIRECT_VIDEO_PATH_EXTENSIONS,
+    MEDIA_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    media_extension_from_url,
+    query_video_extension_from_url,
+)
 from app.services.ytdlp_downloader import YtDlpDownloader
 from app.services.video_stitcher import VideoStitcher
 from app.services.media_tools import probe_file
@@ -29,8 +36,11 @@ def extract_filename_from_url(url: str, default_ext: str = ".mp4") -> str:
         path = unquote(parsed.path)
         base = Path(path).name
         clean_base = sanitize_media_filename(base)
-        if clean_base and "." in clean_base:
+        media_ext = media_extension_from_url(url)
+        if clean_base and Path(clean_base).suffix.lower() in MEDIA_EXTENSIONS:
             return clean_base
+        if media_ext:
+            return f"video_{int(datetime.utcnow().timestamp())}{media_ext}"
     except Exception:
         pass
     return f"video_{int(datetime.utcnow().timestamp())}{default_ext}"
@@ -181,10 +191,14 @@ class DownloadManager:
                 target_folder.mkdir(parents=True, exist_ok=True)
 
                 use_chunk_engine = False
+                url_media_ext = media_extension_from_url(req.url)
+                path_ext = Path(urlparse(req.url).path).suffix.lower()
+                query_video_ext = query_video_extension_from_url(req.url)
+                validate_media_response = bool(query_video_ext and path_ext not in MEDIA_EXTENSIONS)
                 if req.downloader_type == "chunked" or (req.chunk_urls and len(req.chunk_urls) > 0):
                     use_chunk_engine = True
                 elif req.downloader_type == "auto":
-                    if any(req.url.lower().split("?")[0].endswith(ext) for ext in [".mp4", ".mkv", ".webm", ".mov", ".ts"]):
+                    if path_ext in DIRECT_VIDEO_PATH_EXTENSIONS or query_video_ext in VIDEO_EXTENSIONS:
                         use_chunk_engine = True
 
                 if use_chunk_engine:
@@ -195,7 +209,7 @@ class DownloadManager:
                     if req.custom_title and req.custom_title.strip():
                         sanitized = sanitize_media_filename(req.custom_title.strip())
                         if not any(sanitized.lower().endswith(ext) for ext in [".mp4", ".mkv", ".webm", ".mov", ".ts", ".mp3"]):
-                            sanitized += ".mp4"
+                            sanitized += media_extension_from_url(req.url) or ".mp4"
                         filename = sanitized
                     elif req.url:
                         url_name = extract_filename_from_url(req.url)
@@ -223,13 +237,17 @@ class DownloadManager:
                             final_path = await engine.download_with_chunking(
                                 req.url,
                                 output_filename=filename,
-                                num_chunks=req.custom_chunks or 4,
+                                num_chunks=1 if validate_media_response else (req.custom_chunks or 4),
                                 output_dir=target_folder,
-                                progress_callback=progress_cb
+                                progress_callback=progress_cb,
+                                validate_media_response=validate_media_response,
                             )
                     except Exception as chunk_err:
                         if req.downloader_type == "auto" and not req.chunk_urls and not isinstance(chunk_err, asyncio.CancelledError):
-                            logger.warning(f"ChunkEngine encountered error ({chunk_err}), falling back to YtDlpDownloader for {req.url}")
+                            logger.warning(
+                                "ChunkEngine failed with %s; falling back to YtDlpDownloader",
+                                type(chunk_err).__name__,
+                            )
                             downloader = YtDlpDownloader(video_id)
                             self.active_downloaders[video_id] = downloader
                             res = await downloader.download(
@@ -392,7 +410,13 @@ class DownloadManager:
                 self.active_tasks.pop(video_id, None)
                 self.active_downloaders.pop(video_id, None)
 
-    async def start_stitch(self, video_ids: list, title: Optional[str] = None, mode: str = "auto") -> str:
+    async def start_stitch(
+        self,
+        video_ids: list,
+        title: Optional[str] = None,
+        mode: str = "auto",
+        quality: str = "source",
+    ) -> str:
         job_id = str(uuid.uuid4())[:8]
         now = datetime.utcnow().isoformat()
 
@@ -438,11 +462,13 @@ class DownloadManager:
             "video": initial_record
         })
 
-        task = asyncio.create_task(self._run_stitch_task(job_id, valid_videos, actual_title, mode))
+        task = asyncio.create_task(self._run_stitch_task(job_id, valid_videos, actual_title, mode, quality))
         self.active_tasks[job_id] = task
         return job_id
 
-    async def _run_stitch_task(self, job_id: str, valid_videos: list, title: str, mode: str):
+    async def _run_stitch_task(
+        self, job_id: str, valid_videos: list, title: str, mode: str, quality: str
+    ):
         main_loop = asyncio.get_running_loop()
         stitcher = VideoStitcher(job_id)
         self.active_downloaders[job_id] = stitcher
@@ -478,6 +504,7 @@ class DownloadManager:
                 output_dir=target_folder,
                 output_filename=filename,
                 mode=mode,
+                quality=quality,
                 progress_cb=progress_cb
             )
 

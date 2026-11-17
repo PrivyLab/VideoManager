@@ -3,9 +3,56 @@ import asyncio
 import httpx
 import shutil
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 from typing import List, Callable, Optional, Dict, Any
 from app.config import CHUNKS_DIR, DEFAULT_VIDEOS_DIR, get_configured_download_dir
+
+MEDIA_EXTENSIONS = frozenset({
+    ".mp4", ".m4v", ".mkv", ".webm", ".mov", ".ts", ".avi",
+    ".mp3", ".m4a", ".aac", ".ogg", ".wav",
+})
+DIRECT_VIDEO_PATH_EXTENSIONS = frozenset({".mp4", ".mkv", ".webm", ".mov", ".ts"})
+VIDEO_EXTENSIONS = frozenset({".mp4", ".m4v", ".mkv", ".webm", ".mov", ".ts", ".avi"})
+
+
+def media_extension_from_url(url: str) -> Optional[str]:
+    """Return a known media suffix from the path or common filename query parameters."""
+    parsed = urlparse(url)
+    candidates = [parsed.path]
+    query = parse_qs(parsed.query)
+    for key, values in query.items():
+        if key.lower() in {"file", "filename"}:
+            candidates.extend(values)
+
+    for candidate in candidates:
+        suffix = Path(unquote(candidate)).suffix.lower()
+        if suffix in MEDIA_EXTENSIONS:
+            return suffix
+    return None
+
+
+def query_video_extension_from_url(url: str) -> Optional[str]:
+    """Return a video suffix advertised by a filename query parameter."""
+    query = parse_qs(urlparse(url).query)
+    for key, values in query.items():
+        if key.lower() not in {"file", "filename"}:
+            continue
+        for value in values:
+            suffix = Path(unquote(value)).suffix.lower()
+            if suffix in VIDEO_EXTENSIONS:
+                return suffix
+    return None
+
+
+def is_media_content_type(content_type: str, filename: str) -> bool:
+    normalized_type = content_type.partition(";")[0].strip().lower()
+    if normalized_type.startswith(("video/", "audio/")):
+        return True
+    return (
+        normalized_type in {"application/octet-stream", "binary/octet-stream"}
+        and Path(filename).suffix.lower() in MEDIA_EXTENSIONS
+    )
+
 
 class ChunkEngine:
     """
@@ -56,7 +103,7 @@ class ChunkEngine:
                 async with self.client.stream("GET", url, headers={**headers, "Range": "bytes=0-0"}) as stream_resp:
                     content_length = int(stream_resp.headers.get("content-length", 0))
                     accept_ranges = "bytes" in stream_resp.headers.get("accept-ranges", "").lower() or stream_resp.status_code == 206
-                    content_type = stream_resp.headers.get("content-type", "video/mp4")
+                    content_type = stream_resp.headers.get("content-type", "")
                     content_range = stream_resp.headers.get("content-range")
                     if content_range and "/" in content_range:
                         total_from_range = content_range.split("/")[-1]
@@ -67,12 +114,13 @@ class ChunkEngine:
                     return {
                         "content_length": content_length,
                         "accept_ranges": accept_ranges,
-                        "content_type": content_type
+                        "content_type": content_type,
+                        "status_code": stream_resp.status_code,
                     }
             else:
                 content_length = int(resp.headers.get("content-length", 0))
                 accept_ranges = "bytes" in resp.headers.get("accept-ranges", "").lower() or resp.status_code == 206
-                content_type = resp.headers.get("content-type", "video/mp4")
+                content_type = resp.headers.get("content-type", "")
                 
                 content_range = resp.headers.get("content-range")
                 if content_range and "/" in content_range:
@@ -84,13 +132,14 @@ class ChunkEngine:
                 return {
                     "content_length": content_length,
                     "accept_ranges": accept_ranges,
-                    "content_type": content_type
+                    "content_type": content_type,
+                    "status_code": resp.status_code,
                 }
         except Exception as e:
             return {
                 "content_length": 0,
                 "accept_ranges": False,
-                "content_type": "video/mp4",
+                "content_type": "",
                 "error": str(e)
             }
 
@@ -100,7 +149,8 @@ class ChunkEngine:
         output_filename: str,
         output_dir: Optional[Path] = None,
         total_size: int = 0,
-        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        validate_media_response: bool = False,
     ) -> Path:
         """
         Download a single direct video stream without chunks or range slicing.
@@ -133,6 +183,13 @@ class ChunkEngine:
         async with self.client.stream("GET", url, headers=headers) as response:
             if response.status_code >= 400:
                 raise Exception(f"HTTP {response.status_code} fetching direct stream: {response.reason_phrase}")
+
+            content_type = response.headers.get("content-type", "")
+            if validate_media_response and not is_media_content_type(content_type, output_filename):
+                raise ValueError(
+                    "URL response is not a recognized media stream "
+                    f"(Content-Type: {content_type or 'unknown'})."
+                )
 
             resp_len = response.headers.get("content-length")
             if resp_len and resp_len.isdigit() and int(resp_len) > 0:
@@ -236,7 +293,8 @@ class ChunkEngine:
         output_filename: str,
         num_chunks: int = 4,
         output_dir: Optional[Path] = None,
-        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        validate_media_response: bool = False,
     ) -> Path:
         """
         Splits file into `num_chunks` parts, downloads concurrently,
@@ -247,6 +305,13 @@ class ChunkEngine:
         probe = await self.probe_url(url)
         total_size = probe.get("content_length", 0)
         accept_ranges = probe.get("accept_ranges", False)
+        content_type = probe.get("content_type", "")
+
+        if validate_media_response and content_type and not is_media_content_type(content_type, output_filename):
+            raise ValueError(
+                "URL response is not a recognized media stream "
+                f"(Content-Type: {content_type})."
+            )
 
         dest_dir = output_dir or get_configured_download_dir()
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -260,7 +325,8 @@ class ChunkEngine:
                 output_filename=output_filename,
                 output_dir=dest_dir,
                 total_size=total_size,
-                progress_callback=progress_callback
+                progress_callback=progress_callback,
+                validate_media_response=validate_media_response,
             )
 
         chunk_size = total_size // num_chunks
