@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, Set
 from urllib.parse import urlparse, unquote
 from fastapi import WebSocket
 
-from app.database import db_create_video, db_update_video, db_get_video, db_get_all_videos
+from app.database import db_create_video, db_update_video, db_get_video, db_get_all_videos, compute_url_hash
 from app.config import get_configured_download_dir, cleanup_video_artifacts
 from app.models import DownloadRequest
 from app.services.chunk_engine import (
@@ -76,6 +76,7 @@ class DownloadManager:
     async def start_download(self, req: DownloadRequest) -> str:
         video_id = str(uuid.uuid4())[:8]
         now = datetime.utcnow().isoformat()
+        content_hash = compute_url_hash(req.url)
 
         initial_record = {
             "id": video_id,
@@ -96,7 +97,9 @@ class DownloadManager:
             "chunks_total": req.custom_chunks if req.downloader_type == "chunked" else 0,
             "chunks_completed": 0,
             "created_at": now,
-            "completed_at": None
+            "completed_at": None,
+            "content_hash": content_hash,
+            "session_id": None,
         }
         db_create_video(initial_record)
 
@@ -445,7 +448,7 @@ class DownloadManager:
             "thumbnail_url": "",
             "resolution": "",
             "status": "merging",
-            "progress": 10.0,
+            "progress": 5.0,
             "speed": "",
             "eta": "",
             "error_message": "",
@@ -472,25 +475,41 @@ class DownloadManager:
         main_loop = asyncio.get_running_loop()
         stitcher = VideoStitcher(job_id)
         self.active_downloaders[job_id] = stitcher
+        logger.info(f"[{job_id}] Stitching started: {len(valid_videos)} clips, title='{title}', mode={mode}, quality={quality}")
 
         def progress_cb(info: Dict[str, Any]):
             status = info.get("status", "merging")
             progress = info.get("progress", 50.0)
             msg = info.get("message", "")
+            speed = info.get("speed", "")
+            eta = info.get("eta", "")
+            chunks_total = info.get("chunks_total", len(valid_videos))
+            chunks_completed = info.get("chunks_completed", int(len(valid_videos) * (progress / 100.0)))
 
-            db_update_video(job_id, {
+            db_update: Dict[str, Any] = {
                 "status": status,
                 "progress": progress,
-            })
+            }
+            if speed:
+                db_update["speed"] = speed
+            if eta:
+                db_update["eta"] = eta
+            if chunks_total is not None:
+                db_update["chunks_total"] = chunks_total
+            if chunks_completed is not None:
+                db_update["chunks_completed"] = chunks_completed
+
+            db_update_video(job_id, db_update)
 
             coro = self.broadcast({
                 "event": "progress",
                 "video_id": job_id,
                 "status": status,
                 "progress": progress,
-                "message": msg,
-                "chunks_total": len(valid_videos),
-                "chunks_completed": int(len(valid_videos) * (progress / 100.0)),
+                "speed": speed,
+                "eta": eta,
+                "chunks_total": chunks_total,
+                "chunks_completed": chunks_completed,
             })
             asyncio.run_coroutine_threadsafe(coro, main_loop)
 
@@ -541,6 +560,7 @@ class DownloadManager:
             })
         except Exception as e:
             err = str(e)
+            logger.error(f"[{job_id}] Stitching failed with error: {err}", exc_info=True)
             db_update_video(job_id, {"status": "failed", "error_message": err})
             await self.broadcast({
                 "event": "failed",

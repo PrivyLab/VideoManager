@@ -10,7 +10,6 @@ export interface VideoItem {
   resolution?: string;
   status: 'queued' | 'downloading' | 'merging' | 'completed' | 'failed' | 'cancelled';
   progress: number;
-  message?: string;
   speed?: string;
   eta?: string;
   error_message?: string;
@@ -19,6 +18,7 @@ export interface VideoItem {
   chunks_completed?: number;
   created_at: string;
   completed_at?: string;
+  session_id?: string | null;
 }
 
 export interface VideoFormat {
@@ -202,4 +202,20 @@ export interface TrimVideoPayload {
   title?: string;
   mode?: 'fast' | 'reencode';
   extract_audio?: boolean;
+}
+
+export interface Session {
+  id: string;
+  name: string;
+  description?: string;
+  color?: string;
+  created_at: string;
+  updated_at: string;
+  video_count?: number;
+}
+
+export interface DuplicateCheckResult {
+  is_duplicate: boolean;
+  existing_video?: VideoItem | null;
+  message: string;
 }

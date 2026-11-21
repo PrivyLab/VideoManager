@@ -119,6 +119,7 @@ class VideoResponse(BaseModel):
     chunks_completed: Optional[int] = 0
     created_at: str
     completed_at: Optional[str] = None
+    session_id: Optional[str] = None
 
 class ProgressUpdate(BaseModel):
     video_id: str
@@ -197,3 +198,30 @@ class PinConfigRequest(BaseModel):
 
 class BulkDeleteRequest(BaseModel):
     video_ids: List[str]
+
+class SessionCreateRequest(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    color: Optional[str] = "#6366f1"
+
+class SessionUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    color: Optional[str] = None
+
+class SessionResponse(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = ""
+    color: Optional[str] = "#6366f1"
+    created_at: str
+    updated_at: str
+    video_count: Optional[int] = 0
+
+class AssignSessionRequest(BaseModel):
+    session_id: Optional[str] = None  # None = unassign
+
+class DuplicateCheckResponse(BaseModel):
+    is_duplicate: bool
+    existing_video: Optional[dict] = None
+    message: str

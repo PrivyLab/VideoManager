@@ -105,6 +105,32 @@ Use the existing Python/FFmpeg implementation only as a temporary reference for 
 
 **Architecture decision:** TypeScript orchestration in the frontend; a dedicated worker-based media engine; Mediabunny + WebCodecs for the normal processing path; `@ffmpeg/ffmpeg` + the verified single-thread `@ffmpeg/core` only for the named compatibility operations above; OPFS/IndexedDB for local storage; and File System Access API with a download fallback for exports. Keep account, entitlement, audit, and premium URL download flows in the backend. Editing source files and exports must never be sent to it.
 
+#### Automatic GPU & Hardware Acceleration Policy
+
+Use hardware acceleration where the browser and device support it, while preserving usable fallbacks or clear compatibility errors on other devices:
+
+1. **Client-Side Live Web Application (Browser Execution via WebCodecs)**:
+   - This policy is planned for the browser media-engine implementation and is not active until the worker and capability-gated encoding path are added.
+   - At runtime, query `VideoEncoder.isConfigSupported()` for the exact codec, dimensions, frame rate, bitrate mode, and each candidate before expensive work begins. Browser support for this API and codec acceleration varies, so do not infer support from the browser name or file extension.
+   - Probe hardware and software configurations explicitly, for example `hardwareAcceleration: 'prefer-hardware'` and `'prefer-software'`, in a supported worker context. If the preferred hardware configuration is accepted, use it; if it is unsupported or initialization later fails, retry a software/`no-preference` configuration and surface a clear compatibility error only if neither configuration works.
+   - Hardware acceleration applies to browser codec encode/decode operations, not to unrelated JavaScript or canvas work. Actual hardware routing is controlled by the browser and may be unavailable in restricted, virtualized, or power-saving contexts.
+   - Never claim that hardware acceleration guarantees a resolution, frame rate, quality target, exact file size, or output-byte parity. Validate the produced MP4 and decodability through the browser/device golden test matrix.
+
+2. **Backend Services & Desktop Engine (Python / FFmpeg)**:
+   - The backend includes a dynamic hardware encoder detection probe (`detect_hardware_encoder()`).
+   - Its current implementation prioritizes a 64x64 one-frame FFmpeg encode probe in this order:
+     * **macOS / Apple Silicon**: `h264_videotoolbox` (Apple hardware GPU/media engine)
+     * **NVIDIA (Linux/Windows)**: `h264_nvenc`
+     * **Intel (Linux/Windows)**: `h264_qsv`
+     * **Linux VA-API**: `h264_vaapi` is currently detected but not mapped to encode arguments
+     * **Universal fallback**: `libx264` (CPU software encoding)
+   - The probe runs at server startup; subsequent calls reuse the process-cached result until the process restarts. A probe exception or failed candidate falls through to the next candidate or `libx264`.
+   - A successful one-frame probe verifies encoder initialization, but it is not a benchmark or an end-to-end output-quality gate. A real encode can still fail due to resolution, color format, driver, container, or runtime restrictions.
+   - Hardware encoding is an optimization: use the correct encoder arguments for each supported backend, validate the final media for decodability and stream integrity, and compare output behavior rather than assuming byte-for-byte parity with CPU encoding.
+
+- [ ] Complete backend hardware-acceleration implementation by adding a real encode-argument branch for `h264_vaapi`, or remove it from detection if VA-API is not a supported target. Also validate the existing `h264_videotoolbox`, `h264_nvenc`, and `h264_qsv` argument mappings on supported representative hosts.
+- [ ] Add focused hardware tests with mocked FFmpeg candidates: candidate priority, a failed probe continuing to the next candidate, probe exceptions/timeouts, CPU fallback, cache behavior, and exact output arguments for each mapped encoder. Preserve the existing public smoke test, but do not treat it as proof that hardware encoding works.
+- [ ] Add browser capability tests for supported, unsupported, hardware, software, and failed-initialization configurations in dedicated worker jobs. Establish a compatibility matrix for supported desktop/mobile browsers, codecs, resolutions, and devices before promising browser hardware acceleration.
 - [ ] Build golden test fixtures for every current media operation, including mixed portrait/landscape stitching, variable frame rates, missing audio, non-keyframe trim boundaries, and unsupported codecs. Compare browser outputs with defined behavior and decodability checks, not byte-for-byte equality with FFmpeg outputs.
 - [ ] Set per-operation browser/device input limits only after measuring peak memory, processing time, output correctness, tab stability, and thermal/resource behavior on representative desktop and mobile devices. Establish smaller supported limits or disable specific operations on devices that cannot meet the gate; do not assume the downloader's server limit is automatically a safe browser-editing limit.
 - [ ] Build a backend URL-downloader proof of concept for representative supported sources, preserving supported single-video, batch, playlist, and page-link inspection workflows. Test source compatibility, redirects, playlists/manifests, authenticated streaming requests, large files, chunked transfer, slow-client backpressure, cancellation, and client disconnects. For batches and playlists, define browser delivery, partial-failure reporting, and retry behavior without creating server-side archives. Apply SSRF protections and selected egress to page inspection as well as media fetches. Set the initial server-enforced maximum to 100 MB per video; allow admins to set an audited per-user size limit, bounded by a platform hard ceiling established by benchmarks. Also enforce duration, concurrency, and usage limits. Ensure the platform ceiling is within tested browser editing capability unless a separate download-only mode is explicitly designed. On disconnect, abort the upstream fetch and explain that retry may restart from the beginning unless source range support is verified. Do not persist downloaded media or source URLs, and do not let the browser contact the media source directly.

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 from app.services.video_stitcher import get_ffmpeg_bin, get_ffprobe_bin, VideoStitcher
+from app.services.hardware_accel import get_video_encode_args
 
 def probe_file(file_path: Path) -> Dict[str, Any]:
     ffprobe_bin = get_ffprobe_bin()
@@ -132,13 +133,14 @@ async def compress_video(
     elif resolution == "480p":
         scale_filter = "scale=-2:480"
 
+    target_h = 1080 if resolution == "1080p" else (720 if resolution == "720p" else (480 if resolution == "480p" else None))
+    video_args = get_video_encode_args(target_height=target_h, quality_preset=preset, crf=crf)
+
     cmd = [
         ffmpeg_bin,
         "-y",
         "-i", str(source_path.resolve()),
-        "-c:v", "libx264",
-        "-crf", crf,
-        "-preset", speed_preset,
+        *video_args,
         "-c:a", "aac",
         "-b:a", audio_bitrate,
         "-movflags", "+faststart"
@@ -306,15 +308,14 @@ async def trim_video(
             mode = "reencode"
 
     if mode == "reencode":
+        video_args = get_video_encode_args(crf="22")
         cmd = [
             ffmpeg_bin,
             "-y",
             "-ss", str(start_time),
             "-to", str(end_time),
             "-i", str(source_path.resolve()),
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "22",
+            *video_args,
             "-c:a", "aac",
             "-b:a", "128k",
             "-movflags", "+faststart",

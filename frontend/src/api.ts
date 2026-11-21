@@ -14,6 +14,8 @@ import {
   TrimVideoPayload,
   BatchDownloadPayload,
   PlaylistInspectResponse,
+  Session,
+  DuplicateCheckResult,
 } from './types';
 
 const API_BASE = '/api';
@@ -329,4 +331,66 @@ export function formatDuration(seconds: number): string {
     return `${h}:${remM < 10 ? '0' : ''}${remM}:${s < 10 ? '0' : ''}${s}`;
   }
   return `${m}:${s < 10 ? '0' : ''}${s}`;
+}
+
+// ── Sessions API ──────────────────────────────────────────────────────────────
+
+export async function fetchSessions(): Promise<{ sessions: Session[] }> {
+  const res = await fetch(`${API_BASE}/sessions`);
+  if (!res.ok) throw new Error('Failed to fetch sessions');
+  return res.json();
+}
+
+export async function createSession(payload: { name: string; description?: string; color?: string }): Promise<{ success: boolean; session: Session }> {
+  const res = await fetch(`${API_BASE}/sessions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to create session');
+  }
+  return res.json();
+}
+
+export async function updateSession(sessionId: string, payload: { name?: string; description?: string; color?: string }): Promise<{ success: boolean; session: Session }> {
+  const res = await fetch(`${API_BASE}/sessions/${sessionId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to update session');
+  }
+  return res.json();
+}
+
+export async function deleteSession(sessionId: string): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_BASE}/sessions/${sessionId}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to delete session');
+  return res.json();
+}
+
+export async function assignVideoToSession(sessionId: string, videoId: string): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_BASE}/sessions/${sessionId}/assign/${videoId}`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to assign video to session');
+  return res.json();
+}
+
+export async function unassignVideoFromSession(sessionId: string, videoId: string): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_BASE}/sessions/${sessionId}/assign/${videoId}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to unassign video from session');
+  return res.json();
+}
+
+export async function checkDuplicate(url: string): Promise<DuplicateCheckResult> {
+  const res = await fetch(`${API_BASE}/sessions/check-duplicate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+  if (!res.ok) throw new Error('Failed to check duplicate');
+  return res.json();
 }

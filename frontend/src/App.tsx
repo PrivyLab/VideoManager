@@ -3,6 +3,7 @@ import { Navbar } from './components/Navbar';
 import { DownloadCard } from './components/DownloadCard';
 import { ActiveDownloads } from './components/ActiveDownloads';
 import { VideoGrid } from './components/VideoGrid';
+import { SessionManager } from './components/SessionManager';
 import { VideoPlayerModal } from './components/VideoPlayerModal';
 import { ChunkEngineExplainer } from './components/ChunkEngineExplainer';
 import { FolderPickerModal } from './components/FolderPickerModal';
@@ -11,11 +12,13 @@ import { MediaToolsModal } from './components/MediaToolsModal';
 import { BookmarkletModal } from './components/BookmarkletModal';
 import { MobileStreamModal } from './components/MobileStreamModal';
 import { LinkFinderModal } from './components/LinkFinderModal';
-import { fetchVideos, getSystemSettings } from './api';
-import { VideoItem, SystemSettings } from './types';
+import { fetchVideos, getSystemSettings, fetchSessions } from './api';
+import { VideoItem, SystemSettings, Session } from './types';
 
 export const App: React.FC = () => {
   const [videos, setVideos] = useState<VideoItem[]>([]);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [playingVideo, setPlayingVideo] = useState<VideoItem | null>(null);
@@ -55,6 +58,15 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  const loadSessions = useCallback(async () => {
+    try {
+      const data = await fetchSessions();
+      setSessions(data.sessions);
+    } catch (err) {
+      console.error('Failed to load sessions', err);
+    }
+  }, []);
+
   const loadSettings = useCallback(async () => {
     try {
       const data = await getSystemSettings();
@@ -66,8 +78,9 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     loadVideos();
+    loadSessions();
     loadSettings();
-  }, [loadVideos, loadSettings]);
+  }, [loadVideos, loadSessions, loadSettings]);
 
   // WebSocket connection management
   useEffect(() => {
@@ -102,7 +115,6 @@ export const App: React.FC = () => {
                     ...v,
                     status: data.status || v.status,
                     progress: data.progress !== undefined ? data.progress : v.progress,
-                    message: data.message !== undefined ? data.message : v.message,
                     speed: data.speed !== undefined ? data.speed : v.speed,
                     eta: data.eta !== undefined ? data.eta : v.eta,
                     chunks_total: data.chunks_total || v.chunks_total,
@@ -116,6 +128,7 @@ export const App: React.FC = () => {
             setVideos((prev) => [data.video, ...prev.filter((v) => v.id !== data.video.id)]);
           } else if (data.event === 'completed' || data.event === 'failed') {
             loadVideos();
+            loadSessions(); // refresh video counts in sessions
             loadSettings();
           }
         } catch (e) {
@@ -139,7 +152,7 @@ export const App: React.FC = () => {
       clearTimeout(reconnectTimeout);
       if (wsRef.current) wsRef.current.close();
     };
-  }, [loadVideos, loadSettings]);
+  }, [loadVideos, loadSessions, loadSettings]);
 
   const activeDownloads = videos.filter((v) =>
     ['queued', 'downloading', 'merging'].includes(v.status)
@@ -162,7 +175,7 @@ export const App: React.FC = () => {
         onOpenLinkFinder={() => setShowLinkFinder(true)}
       />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
         {/* Download Action Card */}
         <DownloadCard
           currentFolder={settings?.download_folder}
@@ -177,18 +190,38 @@ export const App: React.FC = () => {
           onOpenLinkFinder={() => setShowLinkFinder(true)}
         />
 
-        {/* Active Realtime Downloads */}
+        {/* Active Realtime Downloads — collapsible */}
         <ActiveDownloads downloads={activeDownloads} />
 
-        {/* Video Gallery / History */}
-        <VideoGrid
-          videos={videos}
-          onPlayVideo={(video) => setPlayingVideo(video)}
-          onRefresh={loadVideos}
-          onOpenStitchModal={(selected) => setStitchModalVideos(selected)}
-          onOpenMediaTools={(video, initialTab = 'audio') => setMediaToolsTarget({ video, initialTab })}
-          onOpenMobileStream={(video) => setMobileStreamVideo(video)}
-        />
+        {/* Sessions + Video Library — side by side on larger screens */}
+        <div className="flex flex-col lg:flex-row gap-6 items-start">
+          {/* Session Sidebar */}
+          <div className="w-full lg:w-56 xl:w-64 flex-shrink-0">
+            <SessionManager
+              sessions={sessions}
+              activeSessionId={activeSessionId}
+              onSessionSelect={setActiveSessionId}
+              onSessionsChange={() => {
+                loadSessions();
+                loadVideos();
+              }}
+            />
+          </div>
+
+          {/* Main Video Grid */}
+          <div className="flex-1 min-w-0">
+            <VideoGrid
+              videos={videos}
+              sessions={sessions}
+              activeSessionId={activeSessionId}
+              onPlayVideo={(video) => setPlayingVideo(video)}
+              onRefresh={() => { loadVideos(); loadSessions(); }}
+              onOpenStitchModal={(selected) => setStitchModalVideos(selected)}
+              onOpenMediaTools={(video, initialTab = 'audio') => setMediaToolsTarget({ video, initialTab })}
+              onOpenMobileStream={(video) => setMobileStreamVideo(video)}
+            />
+          </div>
+        </div>
       </main>
 
       {/* Video Player Modal */}

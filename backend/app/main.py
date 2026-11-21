@@ -1,12 +1,23 @@
+import logging
+import sys
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
+# Configure unified backend logging to stdout so service logs appear in the terminal
+logging.basicConfig(
+    level=logging.INFO,
+    format="INFO:     [%(name)s] %(message)s",
+    stream=sys.stdout,
+    force=True,
+)
+
 from app.database import init_db, db_get_video
 from app.config import cleanup_orphaned_temp_files
 from app.routers import downloads, videos, websocket, system
+from app.routers.sessions import router as sessions_router
 from app.services.stream_auth import (
     is_stream_authorized,
     verify_stream_token,
@@ -15,10 +26,32 @@ from app.services.stream_auth import (
     is_client_localhost
 )
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logging.basicConfig(
+        level=logging.INFO,
+        format="INFO:     [%(name)s] %(message)s",
+        stream=sys.stdout,
+        force=True,
+    )
+    for name in ["video_stitcher", "download_manager", "hardware_accel", "chunk_engine", "app"]:
+        logging.getLogger(name).setLevel(logging.INFO)
+
+    # Probe & log active hardware device at server startup
+    from app.services.hardware_accel import detect_hardware_encoder
+    hw = detect_hardware_encoder()
+    logging.getLogger("hardware_accel").info(
+        f"Server video engine initialized: {hw['name']} (encoder={hw['encoder']})"
+    )
+    yield
+
 app = FastAPI(
     title="VideoManager API",
     description="High-performance video downloading, chunking, merging, and streaming engine.",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Enable CORS for local Vite dev server and client requests
@@ -130,6 +163,7 @@ app.include_router(downloads.router)
 app.include_router(videos.router)
 app.include_router(websocket.router)
 app.include_router(system.router)
+app.include_router(sessions_router)
 
 
 @app.get("/watch/{video_id}", response_class=HTMLResponse)
